@@ -1,0 +1,57 @@
+# editors
+.vscode
+*.swp
+*~
+
+# build
+/build*
+/twister-out*
+
+__pycache__/
+
+# docs
+/doc/_build*
+
+# Zephyr Build Artifacts
+**/build/
+zephyr/
+.west/
+
+# Python virtual env
+.venv/
+venv/
+__pycache__/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+
+# Logs e temporários
+*.log
+*~
+
+
+boards/*
+
+doc/*
+
+drivers/*
+
+dts/*
+
+lib/*
+
+scripts/*
+
+tests/*
+
+include/*
+
+.github/*
+
+Kconfig
+
+west.yml
+
+LICENSE

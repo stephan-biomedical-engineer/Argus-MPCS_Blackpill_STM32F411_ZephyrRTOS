@@ -1,0 +1,69 @@
+/ {
+    aliases {
+        led0 = &onboard_led;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+
+        onboard_led: led_pc13 {
+            gpios = <&gpioc 13 GPIO_ACTIVE_LOW>;
+            label = "Onboard LED PC13";
+        };
+    };
+};
+
+
+&dma2 {
+    status = "okay";
+};
+
+
+/* === SPI1 CONFIG === */
+&spi1 {
+    status = "okay";
+
+    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7 &spi1_nss_pa4>;
+    pinctrl-names = "default";
+
+    cs-gpios = <&gpioa 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+    dmas = <&dma2 3 3 0x28440 0x03>,
+           <&dma2 0 3 0x28480 0x03>;
+           
+    dma-names = "tx", "rx";
+};
+
+
+&pinctrl {
+    spi1_sck_pa5: spi1_sck_pa5 {
+        pinmux = <STM32_PINMUX('A', 5, AF5)>;
+        bias-pull-up; 
+    };
+
+    spi1_miso_pa6: spi1_miso_pa6 {
+        pinmux = <STM32_PINMUX('A', 6, AF5)>;
+        bias-pull-down;
+    };
+
+    spi1_mosi_pa7: spi1_mosi_pa7 {
+        pinmux = <STM32_PINMUX('A', 7, AF5)>;
+        bias-pull-up;
+    };
+};
+
+
+
+/* === DESABILITAR O QUE NÃO USA === */
+&i2c1 { status = "disabled"; };
+&i2c2 { status = "disabled"; };
+&i2c3 { status = "disabled"; };
+
+&usart2 { status = "disabled"; };
+&usart6 { status = "disabled"; };
+
+&adc1 { status = "disabled"; };
+
+&timers1 { status = "disabled"; };
+&timers2 { status = "disabled"; };
+&timers11 { status = "disabled"; };
