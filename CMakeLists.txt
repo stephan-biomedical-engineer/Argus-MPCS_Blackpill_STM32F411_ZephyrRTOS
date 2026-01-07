@@ -9,7 +9,9 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
     src/main.c        
     src/cmd.c
-    src/hub.c         
+    src/hub.c
+    src/adc_driver.c
+    src/sensor_data.c         
     utl/utl_io.c      
     utl/utl_crc16.c   
 )

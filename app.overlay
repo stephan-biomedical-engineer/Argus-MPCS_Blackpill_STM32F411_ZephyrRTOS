@@ -1,4 +1,9 @@
 / {
+    
+    zephyr,user {
+        io-channels = <&adc1 1>, <&adc1 2>, <&adc1 3>;
+    };
+    
     aliases {
         led0 = &onboard_led;
         spi-ready = &ready_pin;
@@ -31,7 +36,7 @@
 /* === SPI1 CONFIG === */
 &spi1 {
     status = "okay";
-    
+
     pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7 &spi1_nss_pa4>;
     pinctrl-names = "default";
 
@@ -41,6 +46,38 @@
     dma-names = "tx", "rx";
 };
 
+
+&adc1 {
+    status = "okay";
+    pinctrl-0 = <&adc1_in1_pa1 &adc1_in2_pa2 &adc1_in3_pa3>;
+    pinctrl-names = "default";
+    st,adc-clock-source = <SYNC>;
+    st,adc-prescaler = <4>;
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel@1 {
+        reg = <1>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
+    };
+    channel@2 {
+        reg = <2>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
+    };
+    channel@3 {
+        reg = <3>;
+        zephyr,gain = "ADC_GAIN_1";
+        zephyr,reference = "ADC_REF_INTERNAL";
+        zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+        zephyr,resolution = <12>;
+    };
+};
 
 &pinctrl {
     spi1_sck_pa5: spi1_sck_pa5 {
@@ -57,6 +94,18 @@
         pinmux = <STM32_PINMUX('A', 7, AF5)>;
         bias-pull-up;
     };
+
+    adc1_in1_pa1: adc1_in1_pa1 {
+        pinmux = <STM32_PINMUX('A', 1, ANALOG)>; 
+    };
+
+    adc1_in2_pa2: adc1_in2_pa2 {
+        pinmux = <STM32_PINMUX('A', 2, ANALOG)>;
+    };
+
+    adc1_in3_pa3: adc1_in3_pa3 {
+        pinmux = <STM32_PINMUX('A', 3, ANALOG)>;
+    };
 };
 
 
@@ -68,8 +117,6 @@
 
 &usart2 { status = "disabled"; };
 &usart6 { status = "disabled"; };
-
-&adc1 { status = "disabled"; };
 
 &timers1 { status = "disabled"; };
 &timers2 { status = "disabled"; };
