@@ -1,6 +1,15 @@
 / {
     aliases {
         led0 = &onboard_led;
+        spi-ready = &ready_pin;
+    };
+
+    gpio_keys {
+        compatible = "gpio-keys";
+        ready_pin: ready_pin_pb0 {
+            gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
+            label = "SPI Ready Pin";
+        };
     };
 
     leds {
@@ -22,11 +31,9 @@
 /* === SPI1 CONFIG === */
 &spi1 {
     status = "okay";
-
+    
     pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7 &spi1_nss_pa4>;
     pinctrl-names = "default";
-
-    cs-gpios = <&gpioa 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 
     dmas = <&dma2 3 3 0x28440 0x03>,
            <&dma2 0 3 0x28480 0x03>;
