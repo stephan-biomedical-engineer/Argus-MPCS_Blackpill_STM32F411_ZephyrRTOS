@@ -28,6 +28,7 @@ typedef enum
     CMD_SET_BOLUS,
     CMD_SET_PURGE,
     CMD_SET_RATE,
+    CMD_SET_VOLUME,
     CMD_CLEAR_ALARM
 } command_id_t;
 

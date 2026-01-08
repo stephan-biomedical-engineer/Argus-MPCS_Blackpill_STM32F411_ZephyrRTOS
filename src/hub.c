@@ -1,8 +1,12 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/logging/log.h>
 #include <string.h>
-#include "utl_io.h"
 #include "hub.h"
+#include "cmd.h"
+#include "utl_io.h"
+
+LOG_MODULE_REGISTER(hub, LOG_LEVEL_INF); 
 
 K_THREAD_DEFINE(hub_thread_data, HUB_THREAD_STACK_SIZE,
                     hub_thread_entry,
@@ -12,7 +16,7 @@ K_THREAD_DEFINE(hub_thread_data, HUB_THREAD_STACK_SIZE,
 static const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi1));
 static const struct gpio_dt_spec ready_pin = GPIO_DT_SPEC_GET(DT_ALIAS(spi_ready), gpios);
 
-K_MSGQ_DEFINE(hub_cmd_q, sizeof(cmd_ids_t), 10, 4);
+K_MSGQ_DEFINE(hub_cmd_q, sizeof(pump_cmd_t), 10, 4);
 
 #define HUB_BUFFER_SIZE 300 
 #define SPI_PACKET_SIZE 64
@@ -42,15 +46,16 @@ int hub_init(void)
     return 0;
 }
 
-void hub_set_status(uint8_t state, uint32_t volume, uint32_t pressure, uint8_t alarm) 
+void hub_set_status(uint8_t state, uint32_t volume, uint32_t flow_set, uint32_t pressure, uint8_t alarm)
 {
     status_cache.current_state = state;
     status_cache.volume = volume;
+    status_cache.flow_rate_set = flow_set;
     status_cache.pressure = pressure;
     status_cache.alarm_active = alarm;
 }
 
-int hub_get_command(cmd_ids_t *cmd) 
+int hub_get_command(pump_cmd_t *cmd) 
 {
     return k_msgq_get(&hub_cmd_q, cmd, K_NO_WAIT);
 }
@@ -80,16 +85,22 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         memset(&res_data, 0, sizeof(res_data));
 
         bool decode_success = cmd_decode(rx_buffer, total_valid_len, &src, &dst, &req_id, &req_data);
-
+        
         if(decode_success)
         {            
+            pump_cmd_t internal_cmd = 
+            { 
+                .id = CMD_NONE, 
+                .param = 0.0f 
+            };
+            
             switch(req_id) 
             {
                 case CMD_GET_STATUS_REQ_ID:
                     res_id = CMD_GET_STATUS_RES_ID;
                     res_data.status_res.status_data = status_cache;
                     break;
-
+                
                 case CMD_VERSION_REQ_ID:
                     res_id = CMD_VERSION_RES_ID;
                     res_data.version_res.major = 1;
@@ -97,7 +108,15 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
                     res_data.version_res.patch = 3;
                     break;
 
-                case CMD_SET_CONFIG_REQ_ID:
+                case CMD_SET_CONFIG_REQ_ID:                    
+                    internal_cmd.id = CMD_SET_RATE;
+                    internal_cmd.param = (float)req_data.config_req.config.flow_rate; 
+                    k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
+                    internal_cmd.id = CMD_SET_VOLUME; 
+                    internal_cmd.param = (float)req_data.config_req.config.volume;
+                    k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
                     res_id = CMD_SET_CONFIG_RES_ID;
                     res_data.config_res.status = CMD_OK;
                     break;
@@ -109,12 +128,38 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
                     
                     if (req_id >= CMD_ACTION_RUN_REQ_ID && req_id <= CMD_ACTION_BOLUS_REQ_ID) 
                     { 
-                        k_msgq_put(&hub_cmd_q, &req_id, K_NO_WAIT);
+                        switch(req_id) 
+                        {
+                            case CMD_ACTION_RUN_REQ_ID:   
+                                internal_cmd.id = CMD_START; 
+                                break;
+                            case CMD_ACTION_PAUSE_REQ_ID: 
+                                internal_cmd.id = CMD_PAUSE; 
+                                break;
+                            case CMD_ACTION_ABORT_REQ_ID: 
+                                internal_cmd.id = CMD_STOP; 
+                                break;
+                            case CMD_ACTION_BOLUS_REQ_ID: 
+                                internal_cmd.id = CMD_SET_BOLUS; 
+                                break;
+                            case CMD_ACTION_PURGE_REQ_ID: 
+                                internal_cmd.id = CMD_SET_PURGE; 
+                                break;
+                            default: 
+                                internal_cmd.id = CMD_NONE; 
+                                break;
+                        }
+
+                        if (internal_cmd.id != CMD_NONE) 
+                        {
+                            internal_cmd.param = 0.0f;
+                            k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+                        }
                     }
                     break;
             }
             cmd_encode(tx_buffer, &tx_len, &dst, &src, &res_id, &res_data);
-        } 
+        }
         else 
         {
             res_id = CMD_GET_STATUS_RES_ID;
@@ -137,3 +182,4 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         gpio_pin_set_dt(&ready_pin, 0);
     }
 }
+

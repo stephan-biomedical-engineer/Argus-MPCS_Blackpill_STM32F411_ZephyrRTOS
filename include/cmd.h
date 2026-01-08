@@ -89,8 +89,9 @@ typedef struct __attribute__((packed)) cmd_set_config_res_s
 
 typedef struct __attribute__((packed)) cmd_status_payload_s 
 { 
-    uint8_t current_state; /* Mapeia para pump_state_t */
-    uint32_t volume; 
+    uint8_t current_state; 
+    uint32_t volume;
+    uint32_t flow_rate_set;
     uint32_t pressure; 
     uint8_t alarm_active; 
 } cmd_status_payload_t;
@@ -111,8 +112,8 @@ typedef struct cmd_action_bolus_req_s { } cmd_action_bolus_req_t;
 
 typedef struct __attribute__((packed)) cmd_action_res_s 
 { 
-    uint8_t cmd_req_id; /* [CORRIGIDO] Era cmd_ids_t. Agora é uint8_t. */
-    uint8_t status;     /* [CORRIGIDO] Era cmd_status_t. Agora é uint8_t. */
+    uint8_t cmd_req_id; 
+    uint8_t status;    
 } cmd_action_res_t;
 
 /* --- TAMANHOS ESPERADOS --- */

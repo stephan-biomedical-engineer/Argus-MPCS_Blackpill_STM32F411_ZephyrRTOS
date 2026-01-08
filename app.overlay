@@ -1,20 +1,11 @@
 / {
-    
     zephyr,user {
         io-channels = <&adc1 1>, <&adc1 2>, <&adc1 3>;
     };
     
     aliases {
         led0 = &onboard_led;
-        spi-ready = &ready_pin;
-    };
-
-    gpio_keys {
-        compatible = "gpio-keys";
-        ready_pin: ready_pin_pb0 {
-            gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
-            label = "SPI Ready Pin";
-        };
+        spi-ready = &ready_pin; /* O alias aponta para o novo local */
     };
 
     leds {
@@ -24,28 +15,28 @@
             gpios = <&gpioc 13 GPIO_ACTIVE_LOW>;
             label = "Onboard LED PC13";
         };
+
+        /* MUDANÇA CRUCIAL: O pino Ready agora mora dentro de 'leds' */
+        /* Isso garante que o Zephyr trate ele como SAÍDA (Output) */
+        ready_pin: ready_pin_pb0 {
+            gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
+            label = "SPI Ready Pin";
+        };
     };
 };
-
 
 &dma2 {
     status = "okay";
 };
 
-
-/* === SPI1 CONFIG === */
 &spi1 {
     status = "okay";
-
     pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7 &spi1_nss_pa4>;
     pinctrl-names = "default";
-
     dmas = <&dma2 3 3 0x28440 0x03>,
            <&dma2 0 3 0x28480 0x03>;
-           
     dma-names = "tx", "rx";
 };
-
 
 &adc1 {
     status = "okay";
@@ -108,16 +99,11 @@
     };
 };
 
-
-
-/* === DESABILITAR O QUE NÃO USA === */
 &i2c1 { status = "disabled"; };
 &i2c2 { status = "disabled"; };
 &i2c3 { status = "disabled"; };
-
 &usart2 { status = "disabled"; };
 &usart6 { status = "disabled"; };
-
 &timers1 { status = "disabled"; };
 &timers2 { status = "disabled"; };
 &timers11 { status = "disabled"; };
