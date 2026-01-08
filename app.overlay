@@ -2,6 +2,10 @@
     zephyr,user {
         io-channels = <&adc1 1>, <&adc1 2>, <&adc1 3>;
     };
+
+    chosen {
+        zephyr,code-partition = &slot0_partition;
+    };
     
     aliases {
         led0 = &onboard_led;
@@ -21,6 +25,43 @@
         ready_pin: ready_pin_pb0 {
             gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
             label = "SPI Ready Pin";
+        };
+    };
+};
+
+&flash0 {
+    /delete-node/ partitions;
+};
+
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /* Reservamos os primeiros 5 setores (16x4 + 64) para o Boot */
+        /* Desperdício necessário para alinhar o Slot0 no setor de 128KB */
+        boot_partition: partition@0 {
+            label = "mcuboot";
+            reg = <0x00000000 0x00020000>; /* 128KB */
+        };
+
+        /* Setor 5 Físico */
+        slot0_partition: partition@20000 {
+            label = "image-0";
+            reg = <0x00020000 0x00020000>; /* 128KB */
+        };
+
+        /* Setor 6 Físico */
+        slot1_partition: partition@40000 {
+            label = "image-1";
+            reg = <0x00040000 0x00020000>; /* 128KB */
+        };
+
+        /* Setor 7 Físico */
+        scratch_partition: partition@60000 {
+            label = "image-scratch";
+            reg = <0x00060000 0x00020000>; /* 128KB */
         };
     };
 };

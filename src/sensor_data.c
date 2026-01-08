@@ -39,8 +39,8 @@ void logic_thread_entry(void *p1, void *p2, void *p3)
             //     last_volume = data.volume_mv;
             //     LOG_INF("Novo Volume: %d", data.volume_mv);
             // }
-            LOG_INF("Sensor Data - Bolha: %d mV, Oclusão: %d mV, Volume: %d, Timestamp: %d",
-                     data.bolha_mv, data.oclusao_mv, data.volume_mv, data.timestamp);
+            // LOG_INF("Sensor Data - Bolha: %d mV, Oclusão: %d mV, Volume: %d, Timestamp: %d",
+            //          data.bolha_mv, data.oclusao_mv, data.volume_mv, data.timestamp);
         }
     }
 }

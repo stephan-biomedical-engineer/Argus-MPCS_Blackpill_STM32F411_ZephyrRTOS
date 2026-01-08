@@ -19,18 +19,22 @@
  */
 typedef enum cmd_ids_e
 {
-     CMD_VERSION_REQ_ID                  = 0x01,
-     CMD_VERSION_RES_ID                  = 0x02,
-     CMD_GET_STATUS_REQ_ID               = 0x03, 
-     CMD_GET_STATUS_RES_ID               = 0x04,
-     CMD_SET_CONFIG_REQ_ID               = 0x10, 
-     CMD_SET_CONFIG_RES_ID               = 0x11, 
-     CMD_ACTION_RUN_REQ_ID               = 0x20, 
-     CMD_ACTION_PAUSE_REQ_ID             = 0x21, 
-     CMD_ACTION_ABORT_REQ_ID             = 0x22, 
-     CMD_ACTION_PURGE_REQ_ID             = 0x23, 
-     CMD_ACTION_BOLUS_REQ_ID             = 0x24, 
-     CMD_ACTION_RES_ID                   = 0x2F, 
+    CMD_VERSION_REQ_ID                  = 0x01,
+    CMD_VERSION_RES_ID                  = 0x02,
+    CMD_GET_STATUS_REQ_ID               = 0x03, 
+    CMD_GET_STATUS_RES_ID               = 0x04,
+    CMD_SET_CONFIG_REQ_ID               = 0x10, 
+    CMD_SET_CONFIG_RES_ID               = 0x11, 
+    CMD_ACTION_RUN_REQ_ID               = 0x20, 
+    CMD_ACTION_PAUSE_REQ_ID             = 0x21, 
+    CMD_ACTION_ABORT_REQ_ID             = 0x22, 
+    CMD_ACTION_PURGE_REQ_ID             = 0x23, 
+    CMD_ACTION_BOLUS_REQ_ID             = 0x24, 
+    CMD_ACTION_RES_ID                   = 0x2F, 
+    CMD_OTA_START_REQ_ID                = 0x50,
+    CMD_OTA_CHUNK_REQ_ID                = 0x51,
+    CMD_OTA_END_REQ_ID                  = 0x52,
+    CMD_OTA_RES_ID                      = 0x5F,
 } cmd_ids_t;
 
 typedef enum 
@@ -126,6 +130,7 @@ typedef enum cmd_sizes_e {
     CMD_SET_CONFIG_RES_SIZE     = sizeof(cmd_set_config_res_t),    
     CMD_ACTION_REQ_SIZE         = 0, 
     CMD_ACTION_RES_SIZE         = sizeof(cmd_action_res_t),
+    CMD_OTA_RES_SIZE            = sizeof(cmd_action_res_t),
 } cmd_sizes_t;
 
 /* União para facilitar encode/decode genérico */
@@ -142,9 +147,10 @@ typedef union cmd_cmds_u {
     cmd_action_purge_req_t  purge_req;
     cmd_action_bolus_req_t  bolus_req;
     cmd_action_res_t        action_res;
+    cmd_action_res_t        ota_res;
 } cmd_cmds_t;
 
-#define CMD_NUM_CMDS  0x30
+#define CMD_NUM_CMDS  0x60
 
 /* --- PROTÓTIPOS --- */
 
@@ -162,6 +168,7 @@ bool cmd_encode_action_run_req(uint8_t dst, uint8_t src, cmd_action_run_req_t *c
 bool cmd_encode_action_pause_req(uint8_t dst, uint8_t src, cmd_action_pause_req_t *cmd, uint8_t *buffer, size_t *size);
 bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_t *cmd, uint8_t *buffer, size_t *size);
 bool cmd_encode_action_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint8_t *buffer, size_t *size);
+bool cmd_encode_ota_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint8_t *buffer, size_t *size);
 
 /* Decoders Específicos */
 bool cmd_decode_version_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size);
@@ -178,5 +185,22 @@ bool cmd_decode_action_bolus_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size);
 bool cmd_decode_action_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size);
 
 uint16_t crc16_ccitt(const uint8_t *data, size_t length);
+
+bool cmd_decode_ota_generic(cmd_cmds_t *cmd, uint8_t *buffer, size_t size);
+
+
+typedef struct __attribute__((packed)) 
+{
+    uint32_t total_size;
+} cmd_ota_start_t;
+
+typedef struct __attribute__((packed)) 
+{
+    uint32_t offset;      // Onde gravar na flash
+    uint8_t  len;         // Quantos bytes úteis tem no array
+    uint8_t  data[48];    // Dados binários
+} cmd_ota_chunk_t;
+
+typedef struct { } cmd_ota_end_t;
 
 #endif

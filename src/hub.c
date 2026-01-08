@@ -4,6 +4,7 @@
 #include <string.h>
 #include "hub.h"
 #include "cmd.h"
+#include "ota_handler.h"
 #include "utl_io.h"
 
 LOG_MODULE_REGISTER(hub, LOG_LEVEL_INF); 
@@ -23,10 +24,18 @@ K_MSGQ_DEFINE(hub_cmd_q, sizeof(pump_cmd_t), 10, 4);
 static uint8_t rx_buffer[HUB_BUFFER_SIZE];
 static uint8_t tx_buffer[HUB_BUFFER_SIZE];
 
+// static const struct spi_config spi_cfg = 
+// {
+//     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE | SPI_MODE_CPOL | SPI_MODE_CPHA,
+//     .frequency = 1000000,
+//     .slave = 0,
+// };
+
 static const struct spi_config spi_cfg = 
 {
-    .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE | SPI_MODE_CPOL | SPI_MODE_CPHA,
-    .frequency = 1000000,
+    // Modo 0: CPOL=0, CPHA=0 (Sem flags de CPOL/CPHA)
+    .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE, 
+    .frequency = 1000000, // A frequencia no slave é 'don't care', mas deixe igual
     .slave = 0,
 };
 
@@ -62,6 +71,8 @@ int hub_get_command(pump_cmd_t *cmd)
 
 void hub_thread_entry(void *p1, void *p2, void *p3) 
 {
+    LOG_INF("Hub Thread Iniciada - Aguardando SPI...");
+
     while(1)
     {
         struct spi_buf rx_buf = { .buf = rx_buffer, .len = SPI_PACKET_SIZE };
@@ -73,10 +84,28 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
 
         if (ret < 0) continue; 
 
+        if (rx_buffer[2] == 0x00) {
+            continue;
+        }
+
+        if (rx_buffer[2] != 0x51 && rx_buffer[2] != 0x00) {
+            uint16_t crc_rx = utl_io_get16_fl(&rx_buffer[5]); // Lê onde estaria o CRC do END
+            LOG_INF("SPI DEBUG: ID=%02X Len=%02X%02X CRC_LIDO=%04X", 
+                    rx_buffer[2], rx_buffer[4], rx_buffer[3], crc_rx);
+        }
+
         uint16_t payload_size = utl_io_get16_fl(&rx_buffer[3]); 
         if (payload_size > CMD_MAX_DATA_SIZE) payload_size = CMD_MAX_DATA_SIZE;
 
         size_t total_valid_len = CMD_HDR_SIZE + payload_size + CMD_TRAILER_SIZE;
+        
+        /* LOG DE DIAGNOSTICO DE OTA */
+        // if (rx_buffer[2] >= 0x50) { 
+        //      LOG_INF("RX OTA RAW: ID=0x%02X Len=%d CRC_PKT=%02X%02X", 
+        //              rx_buffer[2], payload_size,
+        //              rx_buffer[total_valid_len-1], rx_buffer[total_valid_len-2]);
+        // }
+
         uint8_t src, dst;
         cmd_ids_t req_id, res_id;
         cmd_cmds_t req_data, res_data;
@@ -88,11 +117,7 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         
         if(decode_success)
         {            
-            pump_cmd_t internal_cmd = 
-            { 
-                .id = CMD_NONE, 
-                .param = 0.0f 
-            };
+            pump_cmd_t internal_cmd = { .id = CMD_NONE, .param = 0.0f };
             
             switch(req_id) 
             {
@@ -103,9 +128,9 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
                 
                 case CMD_VERSION_REQ_ID:
                     res_id = CMD_VERSION_RES_ID;
-                    res_data.version_res.major = 1;
-                    res_data.version_res.minor = 2;
-                    res_data.version_res.patch = 3;
+                    res_data.version_res.major = 2; // Atualizado para refletir v2.0
+                    res_data.version_res.minor = 0;
+                    res_data.version_res.patch = 0;
                     break;
 
                 case CMD_SET_CONFIG_REQ_ID:                    
@@ -120,6 +145,47 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
                     res_id = CMD_SET_CONFIG_RES_ID;
                     res_data.config_res.status = CMD_OK;
                     break;
+                
+                case CMD_OTA_START_REQ_ID:
+                {
+                    uint32_t size = utl_io_get32_fl(&rx_buffer[5]); 
+                    LOG_INF("Comando OTA START Recebido. Tamanho: %d", size);
+                    ota_start(size);
+                    res_id = CMD_OTA_RES_ID;
+                    
+                    res_data.action_res.cmd_req_id = req_id; 
+                    
+                    res_data.action_res.status = CMD_OK; 
+                    break;
+                }
+
+                case CMD_OTA_CHUNK_REQ_ID:
+                {
+                    uint8_t len = rx_buffer[9];
+                    uint8_t *data_ptr = &rx_buffer[10];
+                    
+                    if (ota_write_chunk(data_ptr, len) == 0) {
+                        res_data.action_res.status = CMD_OK;
+                    } else {
+                        res_data.action_res.status = CMD_ERR_INVALID_STATE;
+                    }
+                    res_id = CMD_OTA_RES_ID;
+
+                    res_data.action_res.cmd_req_id = req_id;
+                    break;
+                }
+
+                case CMD_OTA_END_REQ_ID:
+                {
+                    LOG_INF("Comando OTA END Recebido.");
+                    ota_finish();
+                    res_id = CMD_OTA_RES_ID;
+
+                    res_data.action_res.cmd_req_id = req_id;
+
+                    res_data.action_res.status = CMD_OK;
+                    break;
+                }
 
                 default:
                     res_id = CMD_ACTION_RES_ID;
@@ -130,28 +196,14 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
                     { 
                         switch(req_id) 
                         {
-                            case CMD_ACTION_RUN_REQ_ID:   
-                                internal_cmd.id = CMD_START; 
-                                break;
-                            case CMD_ACTION_PAUSE_REQ_ID: 
-                                internal_cmd.id = CMD_PAUSE; 
-                                break;
-                            case CMD_ACTION_ABORT_REQ_ID: 
-                                internal_cmd.id = CMD_STOP; 
-                                break;
-                            case CMD_ACTION_BOLUS_REQ_ID: 
-                                internal_cmd.id = CMD_SET_BOLUS; 
-                                break;
-                            case CMD_ACTION_PURGE_REQ_ID: 
-                                internal_cmd.id = CMD_SET_PURGE; 
-                                break;
-                            default: 
-                                internal_cmd.id = CMD_NONE; 
-                                break;
+                            case CMD_ACTION_RUN_REQ_ID:   internal_cmd.id = CMD_START; break;
+                            case CMD_ACTION_PAUSE_REQ_ID: internal_cmd.id = CMD_PAUSE; break;
+                            case CMD_ACTION_ABORT_REQ_ID: internal_cmd.id = CMD_STOP; break;
+                            case CMD_ACTION_BOLUS_REQ_ID: internal_cmd.id = CMD_SET_BOLUS; break;
+                            case CMD_ACTION_PURGE_REQ_ID: internal_cmd.id = CMD_SET_PURGE; break;
+                            default: internal_cmd.id = CMD_NONE; break;
                         }
-
-                        if (internal_cmd.id != CMD_NONE) 
-                        {
+                        if (internal_cmd.id != CMD_NONE) {
                             internal_cmd.param = 0.0f;
                             k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
                         }
@@ -162,6 +214,11 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         }
         else 
         {
+            /* LOG DE ERRO DE DECODE */
+            if (rx_buffer[2] >= 0x50) {
+                 LOG_ERR("Falha no cmd_decode para ID 0x%02X", rx_buffer[2]);
+            }
+
             res_id = CMD_GET_STATUS_RES_ID;
             uint8_t err_src = ADDR_SLAVE;
             uint8_t err_dst = ADDR_MASTER;
@@ -180,6 +237,7 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         gpio_pin_set_dt(&ready_pin, 1);
         spi_transceive(spi_dev, &spi_cfg, &tx_set, NULL);
         gpio_pin_set_dt(&ready_pin, 0);
+
+        ota_check_and_reboot();
     }
 }
-

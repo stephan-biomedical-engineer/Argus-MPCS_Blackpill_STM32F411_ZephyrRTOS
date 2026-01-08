@@ -11,7 +11,8 @@ target_sources(app PRIVATE
     src/cmd.c
     src/hub.c
     src/adc_driver.c
-    src/sensor_data.c         
+    src/sensor_data.c        
+    src/ota_handler.c 
     utl/utl_io.c      
     utl/utl_crc16.c   
 )

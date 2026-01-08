@@ -1,9 +1,10 @@
 /* src/main.c */
 #include <zephyr/kernel.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include "hub.h"  
-#include "protocol_defs.h" // <--- 1. Importante!
+#include "protocol_defs.h" 
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -22,7 +23,9 @@ int main(void)
         gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);
     }
     
-    LOG_INF("--- Sistema de Infusão Iniciado ---");
+    LOG_INF("--- SISTEMA ATUALIZADO VIA OTA (v1.0.3) ---");
+    boot_write_img_confirmed();
+    LOG_INF("Imagem confirmada pelo Bootloader MCUBoot.");
 
     if (hub_init() != 0) {
         LOG_ERR("Falha fatal no Hub SPI!");

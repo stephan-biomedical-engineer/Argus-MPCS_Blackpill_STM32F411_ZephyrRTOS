@@ -1,6 +1,9 @@
 #include "cmd.h"
 #include "utl_io.h"
 #include "utl_crc16.h"
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(cmd_decoder, LOG_LEVEL_INF);
 
 bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_ids_t *id, cmd_cmds_t *decoded_cmd)
 {
@@ -13,15 +16,26 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
     *id  = (cmd_ids_t)raw_id;
     uint16_t payload_size = utl_io_get16_fl_ap(pbuf);
 
-    if(*id >= CMD_NUM_CMDS) return false;
+    /* VERIFICAÇÃO DE ID */
+    if(*id >= CMD_NUM_CMDS) {
+        LOG_ERR("Decode Falhou: ID Invalido 0x%02X (Max: 0x%02X)", *id, CMD_NUM_CMDS);
+        return false;
+    }
 
     size_t real_packet_len = payload_size + CMD_HDR_SIZE + CMD_TRAILER_SIZE;
-    if(size < real_packet_len) return false;
+    if(size < real_packet_len) {
+        LOG_ERR("Decode Falhou: Tamanho Buffer (%d) < Pacote Real (%d)", size, real_packet_len);
+        return false;
+    }
     
     uint16_t crc = utl_io_get16_fl(buffer + real_packet_len - 2);
     uint16_t crc_calc = utl_crc16_data(buffer, real_packet_len - 2, 0xFFFF);
     
-    if (crc != crc_calc) return false;
+    /* VERIFICAÇÃO DE CRC */
+    if (crc != crc_calc) {
+        LOG_ERR("Decode Falhou CRC: ID=0x%02X Lido=0x%04X Calculado=0x%04X", *id, crc, crc_calc);
+        return false;
+    }
 
     switch(*id)
     {
@@ -37,11 +51,15 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
         case CMD_ACTION_PURGE_REQ_ID:
         case CMD_ACTION_BOLUS_REQ_ID: 
         case CMD_ACTION_RES_ID:
+        case CMD_OTA_START_REQ_ID: // Importante ter aqui para o switch não rejeitar
+        case CMD_OTA_CHUNK_REQ_ID:
+        case CMD_OTA_END_REQ_ID:
             break;
-        default: return false;
+        default: 
+            LOG_ERR("Decode Falhou: ID 0x%02X nao tratado no switch inicial", *id);
+            return false;
     }
 
-    /* Tabela de Decoders - ATENÇÃO AQUI: O Mestre precisa saber decodificar RESPOSTAS */
     bool (*decoders[])(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) =
     {
         [CMD_VERSION_REQ_ID]        = cmd_decode_version_req,
@@ -49,19 +67,22 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
         [CMD_GET_STATUS_REQ_ID]     = cmd_decode_status_req,
         [CMD_GET_STATUS_RES_ID]     = cmd_decode_status_res,  
         [CMD_SET_CONFIG_REQ_ID]     = cmd_decode_config_req,
-        
-        /* ESTES ESTAVAM FALTANDO NO MESTRE: */
         [CMD_SET_CONFIG_RES_ID]     = cmd_decode_config_res,  
         [CMD_ACTION_RES_ID]         = cmd_decode_action_res, 
-        
         [CMD_ACTION_RUN_REQ_ID]     = cmd_decode_action_run_req,
         [CMD_ACTION_PAUSE_REQ_ID]   = cmd_decode_action_pause_req,
         [CMD_ACTION_ABORT_REQ_ID]   = cmd_decode_action_abort_req,
         [CMD_ACTION_PURGE_REQ_ID]   = cmd_decode_action_purge_req,
         [CMD_ACTION_BOLUS_REQ_ID]   = cmd_decode_action_bolus_req,
+        [CMD_OTA_START_REQ_ID]      = cmd_decode_ota_generic,
+        [CMD_OTA_CHUNK_REQ_ID]      = cmd_decode_ota_generic,
+        [CMD_OTA_END_REQ_ID]        = cmd_decode_ota_generic,
     };
      
-    if (decoders[(uint8_t)*id] == NULL) return false;
+    if (decoders[(uint8_t)*id] == NULL) {
+        LOG_ERR("Decode Falhou: Sem decoder registrado para ID 0x%02X", *id);
+        return false;
+    }
 
     return decoders[(uint8_t)*id](decoded_cmd, pbuf, payload_size);
 }
@@ -104,6 +125,9 @@ bool cmd_encode(uint8_t *buffer, size_t *size, uint8_t *src, uint8_t *dst, cmd_i
             break;
         case CMD_ACTION_RES_ID:
             status = cmd_encode_action_res(*dst, *src, &encoded_cmd->action_res, buffer, size);
+            break;
+        case CMD_OTA_RES_ID:
+            status = cmd_encode_ota_res(*dst, *src, &encoded_cmd->action_res, buffer, size);
             break;
             
         default:
@@ -167,6 +191,11 @@ bool cmd_decode_action_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
     cmd->action_res.cmd_req_id = (cmd_ids_t)utl_io_get8_fl_ap(pbuf);
     cmd->action_res.status = (cmd_status_t)utl_io_get8_fl_ap(pbuf);
     return true;
+}
+
+bool cmd_decode_ota_generic(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
+    return true; 
 }
 
 static bool cmd_encode_header_only(uint8_t dst, uint8_t src, cmd_ids_t id, uint8_t *buffer, size_t *size) {
@@ -272,3 +301,28 @@ bool cmd_encode_action_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint
     *size = (pbuf - buffer);
     return true;
 }
+
+
+/* Adicione esta função em src/cmd.c */
+bool cmd_encode_ota_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint8_t *buffer, size_t *size)
+{
+    uint8_t *pbuf = buffer;
+    utl_io_put8_tl_ap(dst, pbuf);
+    utl_io_put8_tl_ap(src, pbuf);
+    
+    // AQUI É A CHAVE: Escrevemos 0x5F (OTA_RES) e não 0x2F (ACTION_RES)
+    utl_io_put8_tl_ap(CMD_OTA_RES_ID, pbuf); 
+    
+    // O tamanho é o mesmo da Action Res
+    utl_io_put16_tl_ap(CMD_OTA_RES_SIZE, pbuf);
+    
+    utl_io_put8_tl_ap(cmd->cmd_req_id, pbuf);
+    utl_io_put8_tl_ap(cmd->status, pbuf);
+    
+    // Calcula CRC
+    utl_io_put16_tl_ap(utl_crc16_data(buffer, CMD_HDR_SIZE + CMD_ACTION_RES_SIZE, 0xFFFF), pbuf);
+    
+    *size = (pbuf - buffer);
+    return true;
+}
+
