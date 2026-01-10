@@ -24,18 +24,11 @@ K_MSGQ_DEFINE(hub_cmd_q, sizeof(pump_cmd_t), 10, 4);
 static uint8_t rx_buffer[HUB_BUFFER_SIZE];
 static uint8_t tx_buffer[HUB_BUFFER_SIZE];
 
-// static const struct spi_config spi_cfg = 
-// {
-//     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE | SPI_MODE_CPOL | SPI_MODE_CPHA,
-//     .frequency = 1000000,
-//     .slave = 0,
-// };
-
 static const struct spi_config spi_cfg = 
 {
     // Modo 0: CPOL=0, CPHA=0 (Sem flags de CPOL/CPHA)
     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE, 
-    .frequency = 1000000, // A frequencia no slave é 'don't care', mas deixe igual
+    .frequency = 1000000, 
     .slave = 0,
 };
 

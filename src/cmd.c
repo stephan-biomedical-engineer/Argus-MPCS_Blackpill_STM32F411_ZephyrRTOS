@@ -51,7 +51,7 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
         case CMD_ACTION_PURGE_REQ_ID:
         case CMD_ACTION_BOLUS_REQ_ID: 
         case CMD_ACTION_RES_ID:
-        case CMD_OTA_START_REQ_ID: // Importante ter aqui para o switch não rejeitar
+        case CMD_OTA_START_REQ_ID: 
         case CMD_OTA_CHUNK_REQ_ID:
         case CMD_OTA_END_REQ_ID:
             break;
@@ -93,7 +93,6 @@ bool cmd_encode(uint8_t *buffer, size_t *size, uint8_t *src, uint8_t *dst, cmd_i
 
     switch(*id)
     {
-        /* REQs (Usados pelo Master) */
         case CMD_VERSION_REQ_ID:
             status = cmd_encode_version_req(*dst, *src, &encoded_cmd->version_req, buffer, size);
             break;
@@ -113,7 +112,6 @@ bool cmd_encode(uint8_t *buffer, size_t *size, uint8_t *src, uint8_t *dst, cmd_i
             status = cmd_encode_action_abort_req(*dst, *src, &encoded_cmd->abort_req, buffer, size);
             break;
         
-        /* RESs (Usados pelo Slave) */
         case CMD_VERSION_RES_ID:
             status = cmd_encode_version_res(*dst, *src, &encoded_cmd->version_res, buffer, size);
             break;

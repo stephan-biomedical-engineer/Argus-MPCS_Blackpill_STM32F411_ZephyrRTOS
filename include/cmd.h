@@ -14,9 +14,6 @@
 #define ADDR_MASTER        0x00 
 #define ADDR_SLAVE         0x01 
 
-/* * ENUMS: Mantidos para uso lógico no código (Switch/Case),
- * mas NÃO devem ser usados diretamente dentro das structs de rede (packed).
- */
 typedef enum cmd_ids_e
 {
     CMD_VERSION_REQ_ID                  = 0x01,

@@ -46,7 +46,7 @@ void ota_check_and_reboot(void)
     if (reboot_pending) 
     {
         LOG_WRN("Reiniciando sistema para aplicar update...");
-        k_msleep(500); // Dá tempo do SPI terminar a resposta
+        k_msleep(500); 
         sys_reboot(SYS_REBOOT_COLD);
     }
 }
