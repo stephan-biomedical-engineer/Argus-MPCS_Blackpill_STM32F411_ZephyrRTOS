@@ -2,7 +2,6 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
 #include "adc_driver.h"
-#include "sensor_data.h"
 
 LOG_MODULE_REGISTER(adc_driver, LOG_LEVEL_INF);
 
@@ -109,11 +108,10 @@ void adc_thread_entry(void *p1, void *p2, void *p3)
         filt_idx = (filt_idx + 1) % FILT_LEN;
         packet.oclusao_mv = filt_accumulator / FILT_LEN;
 
-        packet.volume_mv = raw_mv_buf[2];
+        packet.volume_pot_mv = raw_mv_buf[2];
         packet.timestamp = k_uptime_get_32();
 
         k_msgq_put(&sensor_data_q, &packet, K_NO_WAIT);
-
         k_sleep(K_MSEC(10));
     }
 }

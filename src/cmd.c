@@ -1,9 +1,6 @@
 #include "cmd.h"
 #include "utl_io.h"
 #include "utl_crc16.h"
-#include <zephyr/logging/log.h>
-
-LOG_MODULE_REGISTER(cmd_decoder, LOG_LEVEL_INF);
 
 bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_ids_t *id, cmd_cmds_t *decoded_cmd)
 {
@@ -16,24 +13,22 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
     *id  = (cmd_ids_t)raw_id;
     uint16_t payload_size = utl_io_get16_fl_ap(pbuf);
 
-    /* VERIFICAÇÃO DE ID */
-    if(*id >= CMD_NUM_CMDS) {
-        LOG_ERR("Decode Falhou: ID Invalido 0x%02X (Max: 0x%02X)", *id, CMD_NUM_CMDS);
+    if(*id >= CMD_NUM_CMDS) 
+    {
         return false;
     }
 
     size_t real_packet_len = payload_size + CMD_HDR_SIZE + CMD_TRAILER_SIZE;
-    if(size < real_packet_len) {
-        LOG_ERR("Decode Falhou: Tamanho Buffer (%d) < Pacote Real (%d)", size, real_packet_len);
+    if(size < real_packet_len) 
+    {
         return false;
     }
     
     uint16_t crc = utl_io_get16_fl(buffer + real_packet_len - 2);
     uint16_t crc_calc = utl_crc16_data(buffer, real_packet_len - 2, 0xFFFF);
     
-    /* VERIFICAÇÃO DE CRC */
-    if (crc != crc_calc) {
-        LOG_ERR("Decode Falhou CRC: ID=0x%02X Lido=0x%04X Calculado=0x%04X", *id, crc, crc_calc);
+    if (crc != crc_calc) 
+    {
         return false;
     }
 
@@ -56,7 +51,6 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
         case CMD_OTA_END_REQ_ID:
             break;
         default: 
-            LOG_ERR("Decode Falhou: ID 0x%02X nao tratado no switch inicial", *id);
             return false;
     }
 
@@ -80,7 +74,6 @@ bool cmd_decode(uint8_t *buffer, size_t size, uint8_t *src, uint8_t *dst, cmd_id
     };
      
     if (decoders[(uint8_t)*id] == NULL) {
-        LOG_ERR("Decode Falhou: Sem decoder registrado para ID 0x%02X", *id);
         return false;
     }
 
@@ -145,7 +138,8 @@ bool cmd_decode_action_abort_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
 bool cmd_decode_action_purge_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) { return size == 0; }
 bool cmd_decode_action_bolus_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) { return size == 0; }
 
-bool cmd_decode_config_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
+bool cmd_decode_config_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
     uint8_t *pbuf = buffer;
     if(size != CMD_SET_CONFIG_REQ_SIZE) return false;
     cmd->config_req.config.volume = utl_io_get32_fl_ap(pbuf);
@@ -156,7 +150,8 @@ bool cmd_decode_config_req(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
 }
 
 /* Decoders de Resposta (Necessários para o Master ler o Slave) */
-bool cmd_decode_version_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
+bool cmd_decode_version_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
     uint8_t *pbuf = buffer;
     if(size != CMD_VERSION_RES_SIZE) return false;
     cmd->version_res.major = utl_io_get8_fl_ap(pbuf);
@@ -165,7 +160,8 @@ bool cmd_decode_version_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
     return true;
 }
 
-bool cmd_decode_status_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
+bool cmd_decode_status_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
     uint8_t *pbuf = buffer;
     if(size != CMD_GET_STATUS_RES_SIZE) return false;
     cmd->status_res.status_data.current_state = utl_io_get8_fl_ap(pbuf);
@@ -176,14 +172,16 @@ bool cmd_decode_status_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
     return true;
 }
 
-bool cmd_decode_config_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
+bool cmd_decode_config_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
     uint8_t *pbuf = buffer;
     if(size != CMD_SET_CONFIG_RES_SIZE) return false;
     cmd->config_res.status = (cmd_status_t)utl_io_get8_fl_ap(pbuf);
     return true;
 }
 
-bool cmd_decode_action_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) {
+bool cmd_decode_action_res(cmd_cmds_t *cmd, uint8_t *buffer, size_t size) 
+{
     uint8_t *pbuf = buffer;
     if(size != CMD_ACTION_RES_SIZE) return false;
     cmd->action_res.cmd_req_id = (cmd_ids_t)utl_io_get8_fl_ap(pbuf);
@@ -196,7 +194,8 @@ bool cmd_decode_ota_generic(cmd_cmds_t *cmd, uint8_t *buffer, size_t size)
     return true; 
 }
 
-static bool cmd_encode_header_only(uint8_t dst, uint8_t src, cmd_ids_t id, uint8_t *buffer, size_t *size) {
+static bool cmd_encode_header_only(uint8_t dst, uint8_t src, cmd_ids_t id, uint8_t *buffer, size_t *size) 
+{
     uint8_t *pbuf = buffer;
     utl_io_put8_tl_ap(dst, pbuf);
     utl_io_put8_tl_ap(src, pbuf);
@@ -207,23 +206,33 @@ static bool cmd_encode_header_only(uint8_t dst, uint8_t src, cmd_ids_t id, uint8
     return true;
 }
 
-bool cmd_encode_version_req(uint8_t dst, uint8_t src, cmd_version_req_t *cmd, uint8_t *buffer, size_t *size) {
+bool cmd_encode_version_req(uint8_t dst, uint8_t src, cmd_version_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     return cmd_encode_header_only(dst, src, CMD_VERSION_REQ_ID, buffer, size);
 }
-bool cmd_encode_status_req(uint8_t dst, uint8_t src, cmd_get_status_req_t *cmd, uint8_t *buffer, size_t *size) {
+
+bool cmd_encode_status_req(uint8_t dst, uint8_t src, cmd_get_status_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     return cmd_encode_header_only(dst, src, CMD_GET_STATUS_REQ_ID, buffer, size);
 }
-bool cmd_encode_action_run_req(uint8_t dst, uint8_t src, cmd_action_run_req_t *cmd, uint8_t *buffer, size_t *size) {
+
+bool cmd_encode_action_run_req(uint8_t dst, uint8_t src, cmd_action_run_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     return cmd_encode_header_only(dst, src, CMD_ACTION_RUN_REQ_ID, buffer, size);
 }
-bool cmd_encode_action_pause_req(uint8_t dst, uint8_t src, cmd_action_pause_req_t *cmd, uint8_t *buffer, size_t *size) {
+
+bool cmd_encode_action_pause_req(uint8_t dst, uint8_t src, cmd_action_pause_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     return cmd_encode_header_only(dst, src, CMD_ACTION_PAUSE_REQ_ID, buffer, size);
 }
-bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_t *cmd, uint8_t *buffer, size_t *size) {
+
+bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     return cmd_encode_header_only(dst, src, CMD_ACTION_ABORT_REQ_ID, buffer, size);
 }
 
-bool cmd_encode_config_req(uint8_t dst, uint8_t src, cmd_set_config_req_t *cmd, uint8_t *buffer, size_t *size) {
+bool cmd_encode_config_req(uint8_t dst, uint8_t src, cmd_set_config_req_t *cmd, uint8_t *buffer, size_t *size) 
+{
     uint8_t *pbuf = buffer;
     utl_io_put8_tl_ap(dst, pbuf);
     utl_io_put8_tl_ap(src, pbuf);
@@ -300,25 +309,16 @@ bool cmd_encode_action_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint
     return true;
 }
 
-
-/* Adicione esta função em src/cmd.c */
 bool cmd_encode_ota_res(uint8_t dst, uint8_t src, cmd_action_res_t *cmd, uint8_t *buffer, size_t *size)
 {
     uint8_t *pbuf = buffer;
     utl_io_put8_tl_ap(dst, pbuf);
     utl_io_put8_tl_ap(src, pbuf);
-    
-    // AQUI É A CHAVE: Escrevemos 0x5F (OTA_RES) e não 0x2F (ACTION_RES)
     utl_io_put8_tl_ap(CMD_OTA_RES_ID, pbuf); 
-    
-    // O tamanho é o mesmo da Action Res
     utl_io_put16_tl_ap(CMD_OTA_RES_SIZE, pbuf);
-    
     utl_io_put8_tl_ap(cmd->cmd_req_id, pbuf);
     utl_io_put8_tl_ap(cmd->status, pbuf);
-    
-    // Calcula CRC
-    utl_io_put16_tl_ap(utl_crc16_data(buffer, CMD_HDR_SIZE + CMD_ACTION_RES_SIZE, 0xFFFF), pbuf);
+    utl_io_put16_tl_ap(utl_crc16_data(buffer, CMD_HDR_SIZE + CMD_OTA_RES_SIZE, 0xFFFF), pbuf);
     
     *size = (pbuf - buffer);
     return true;

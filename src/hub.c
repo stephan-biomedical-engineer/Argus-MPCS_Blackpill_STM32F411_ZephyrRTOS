@@ -1,18 +1,17 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/app_version.h>
 #include <string.h>
 #include "hub.h"
 #include "cmd.h"
 #include "ota_handler.h"
 #include "utl_io.h"
+#include "sensor_data.h"
 
 LOG_MODULE_REGISTER(hub, LOG_LEVEL_INF); 
 
-K_THREAD_DEFINE(hub_thread_data, HUB_THREAD_STACK_SIZE,
-                    hub_thread_entry,
-                    NULL, NULL, NULL,
-                    HUB_THREAD_PRIORITY, 0, 0);
+K_THREAD_DEFINE(hub_thread_data, HUB_THREAD_STACK_SIZE, hub_thread_entry, NULL, NULL, NULL, HUB_THREAD_PRIORITY, 0, 0);
 
 static const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi1));
 static const struct gpio_dt_spec ready_pin = GPIO_DT_SPEC_GET(DT_ALIAS(spi_ready), gpios);
@@ -32,7 +31,7 @@ static const struct spi_config spi_cfg =
     .slave = 0,
 };
 
-static cmd_status_payload_t status_cache;
+static pump_status_t status_cache;
 
 int hub_init(void)
 {
@@ -48,13 +47,18 @@ int hub_init(void)
     return 0;
 }
 
-void hub_set_status(uint8_t state, uint32_t volume, uint32_t flow_set, uint32_t pressure, uint8_t alarm)
+static void fill_status_payload(cmd_status_payload_t *payload) 
 {
-    status_cache.current_state = state;
-    status_cache.volume = volume;
-    status_cache.flow_rate_set = flow_set;
-    status_cache.pressure = pressure;
-    status_cache.alarm_active = alarm;
+    payload->current_state = (uint8_t)status_cache.current_state;
+    payload->volume = (uint32_t)status_cache.infused_volume;
+    payload->flow_rate_set = status_cache.configured_flow_rate;
+    payload->pressure = status_cache.pressure_mmhg;
+    payload->alarm_active = (status_cache.current_state >= STATE_ALARM_BUBBLE);
+}
+
+void hub_set_status(const pump_status_t *status)
+{
+    status_cache = *status; 
 }
 
 int hub_get_command(pump_cmd_t *cmd) 
@@ -83,8 +87,8 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
 
         if (rx_buffer[2] != 0x51 && rx_buffer[2] != 0x00) {
             uint16_t crc_rx = utl_io_get16_fl(&rx_buffer[5]); // Lê onde estaria o CRC do END
-            LOG_INF("SPI DEBUG: ID=%02X Len=%02X%02X CRC_LIDO=%04X", 
-                    rx_buffer[2], rx_buffer[4], rx_buffer[3], crc_rx);
+            // LOG_INF("SPI DEBUG: ID=%02X Len=%02X%02X CRC_LIDO=%04X", 
+            //         rx_buffer[2], rx_buffer[4], rx_buffer[3], crc_rx);
         }
 
         uint16_t payload_size = utl_io_get16_fl(&rx_buffer[3]); 
@@ -116,23 +120,35 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
             {
                 case CMD_GET_STATUS_REQ_ID:
                     res_id = CMD_GET_STATUS_RES_ID;
-                    res_data.status_res.status_data = status_cache;
+                    fill_status_payload(&res_data.status_res.status_data);
                     break;
                 
                 case CMD_VERSION_REQ_ID:
                     res_id = CMD_VERSION_RES_ID;
-                    res_data.version_res.major = 2; // Atualizado para refletir v2.0
-                    res_data.version_res.minor = 0;
-                    res_data.version_res.patch = 0;
+                    res_data.version_res.major = APP_VERSION_MAJOR; 
+                    res_data.version_res.minor = APP_VERSION_MINOR;
+                    res_data.version_res.patch = APP_PATCHLEVEL;
                     break;
 
                 case CMD_SET_CONFIG_REQ_ID:                    
+                    /* 1. Setar Vazão */
                     internal_cmd.id = CMD_SET_RATE;
                     internal_cmd.param = (float)req_data.config_req.config.flow_rate; 
                     k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
 
+                    /* 2. Setar Volume Alvo */
                     internal_cmd.id = CMD_SET_VOLUME; 
                     internal_cmd.param = (float)req_data.config_req.config.volume;
+                    k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
+                    /* 3. Setar Diâmetro */
+                    internal_cmd.id = CMD_SET_DIAMETER;
+                    internal_cmd.param = (float)req_data.config_req.config.diameter;
+                    k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
+                    /* 4. Setar Modo */
+                    internal_cmd.id = CMD_SET_MODE;
+                    internal_cmd.param = (float)req_data.config_req.config.mode;
                     k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
 
                     res_id = CMD_SET_CONFIG_RES_ID;
@@ -207,7 +223,6 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
         }
         else 
         {
-            /* LOG DE ERRO DE DECODE */
             if (rx_buffer[2] >= 0x50) {
                  LOG_ERR("Falha no cmd_decode para ID 0x%02X", rx_buffer[2]);
             }
@@ -215,7 +230,8 @@ void hub_thread_entry(void *p1, void *p2, void *p3)
             res_id = CMD_GET_STATUS_RES_ID;
             uint8_t err_src = ADDR_SLAVE;
             uint8_t err_dst = ADDR_MASTER;
-            res_data.status_res.status_data = status_cache;
+            fill_status_payload(&res_data.status_res.status_data);
+            
             cmd_encode(tx_buffer, &tx_len, &err_dst, &err_src, &res_id, &res_data);
         }
 
