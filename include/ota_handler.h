@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 void ota_start(uint32_t total_size);
-int ota_write_chunk(uint8_t *data, size_t len);
+int ota_write_chunk(uint8_t* data, size_t len);
 void ota_finish(void);
 void ota_check_and_reboot(void);
 

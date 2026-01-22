@@ -7,6 +7,6 @@
 extern struct k_msgq sensor_data_q;
 
 int adc_driver_init(void);
-void adc_thread_entry(void *p1, void *p2, void *p3);
+void adc_thread_entry(void* p1, void* p2, void* p3);
 
 #endif

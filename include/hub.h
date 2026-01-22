@@ -10,11 +10,10 @@
 
 int hub_init(void);
 
-void hub_set_status(const pump_status_t *status);
+void hub_set_status(const pump_status_t* status);
 
-void hub_thread_entry(void *p1, void *p2, void *p3);
+void hub_thread_entry(void* p1, void* p2, void* p3);
 
-int hub_get_command(pump_cmd_t *cmd) ;
-
+int hub_get_command(pump_cmd_t* cmd);
 
 #endif
