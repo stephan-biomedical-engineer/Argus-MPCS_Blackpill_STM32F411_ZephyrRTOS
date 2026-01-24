@@ -2,6 +2,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/app_version.h>
+#include <zephyr/sys/reboot.h>
 #include <string.h>
 #include <soc.h>
 #include <stm32_ll_spi.h>
@@ -20,13 +21,34 @@ static const struct gpio_dt_spec ready_pin = GPIO_DT_SPEC_GET(DT_ALIAS(spi_ready
 
 K_MSGQ_DEFINE(hub_cmd_q, sizeof(pump_cmd_t), 10, 4);
 
-#define SPI_PACKET_SIZE 64
-static uint8_t rx_buffer[SPI_PACKET_SIZE];
-static uint8_t tx_buffer[SPI_PACKET_SIZE];
+// --- DEFINIÇÕES DE FRAMING (SOF) ---
+#define SOF_BYTE_1 0xAA
+#define SOF_BYTE_2 0x55
+
+#define SPI_PACKET_SIZE 64                     // Tamanho do chunk físico lido do SPI
+static uint8_t rx_raw_buffer[SPI_PACKET_SIZE]; // Buffer DMA
+static uint8_t tx_buffer[SPI_PACKET_SIZE];     // Buffer de resposta
+
+// --- VARIÁVEIS DO PARSER (MÁQUINA DE ESTADOS) ---
+typedef enum
+{
+    STATE_WAIT_SOF1,
+    STATE_WAIT_SOF2,
+    STATE_READ_HEADER,
+    STATE_READ_PAYLOAD,
+    STATE_READ_CRC
+} parser_state_t;
+
+static parser_state_t p_state = STATE_WAIT_SOF1;
+static uint8_t p_buffer[CMD_MAX_DATA_SIZE + 16]; // Buffer de montagem
+static uint16_t p_index = 0;
+static uint16_t p_expected_len = 0;
+
 static int spi_consecutive_errors = 0;
 
-static const struct spi_config spi_cfg = {
-    // Modo 0: CPOL=0, CPHA=0 (Sem flags de CPOL/CPHA)
+static const struct spi_config spi_cfg = 
+{
+    // Modo 0: CPOL=0, CPHA=0
     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_SLAVE,
     .frequency = 1000000,
     .slave = 0,
@@ -34,13 +56,32 @@ static const struct spi_config spi_cfg = {
 
 static pump_status_t status_cache;
 
+// --- RESET DE HARDWARE (Auto-Cura) ---
+static void reset_spi_peripheral(void)
+{
+    SPI_TypeDef* spi_regs = (SPI_TypeDef*) DT_REG_ADDR(DT_NODELABEL(spi1));
+
+    // Sequência de Reset Seguro
+    spi_regs->CR1 &= ~SPI_CR1_SPE; // Desabilita
+    k_busy_wait(100);
+
+    // Limpa Flags
+    volatile uint32_t temp;
+    temp = spi_regs->DR;
+    temp = spi_regs->SR;
+    (void) temp;
+
+    spi_regs->CR1 |= SPI_CR1_SPE; // Habilita
+    LOG_WRN(">>> SPI HARDWARE RESET <<<");
+}
+
 int hub_init(void)
 {
     if(!device_is_ready(spi_dev))
         return -1;
 
     memset(tx_buffer, 0, sizeof(tx_buffer));
-    memset(rx_buffer, 0, sizeof(rx_buffer));
+    memset(rx_raw_buffer, 0, sizeof(rx_raw_buffer));
     memset(&status_cache, 0, sizeof(status_cache));
 
     if(device_is_ready(ready_pin.port))
@@ -63,253 +104,276 @@ void hub_set_status(const pump_status_t* status)
 {
     status_cache = *status;
 }
-
 int hub_get_command(pump_cmd_t* cmd)
 {
     return k_msgq_get(&hub_cmd_q, cmd, K_NO_WAIT);
 }
 
-static void reset_spi_peripheral(void)
+// --- PROCESSADOR DE PACOTE VÁLIDO ---
+static void process_valid_packet(uint8_t* buffer, size_t len)
 {
-    SPI_TypeDef* spi_regs = (SPI_TypeDef*) DT_REG_ADDR(DT_NODELABEL(spi1));
+    // Zera erros pois tivemos sucesso
+    if(spi_consecutive_errors > 0)
+    {
+        LOG_INF("SPI Recuperado! Erros zerados.");
+        spi_consecutive_errors = 0;
+    }
 
-    spi_regs->CR1 &= ~SPI_CR1_SPE;
+    uint8_t src, dst;
+    cmd_ids_t req_id, res_id;
+    cmd_cmds_t req_data, res_data;
+    size_t tx_len = 0;
 
-    k_busy_wait(100);
+    memset(&res_data, 0, sizeof(res_data));
 
-    volatile uint32_t temp;
-    temp = spi_regs->DR;
-    temp = spi_regs->SR;
-    (void) temp;
+    // O 'buffer' aqui começa no byte 0 (que agora é SOF1 0xAA) graças à lógica do parser.
+    bool decode_success = cmd_decode(buffer, len, &src, &dst, &req_id, &req_data);
 
-    spi_regs->CR1 |= SPI_CR1_SPE;
+    if(!decode_success)
+    {
+        LOG_WRN("Erro logico no cmd_decode (Estrutura invalida)");
+        return;
+    }
 
-    LOG_WRN(">>> SPI HARDWARE RESET <<<");
+    pump_cmd_t internal_cmd = {.id = CMD_NONE, .param = 0.0f};
+
+    switch(req_id)
+    {
+    case CMD_GET_STATUS_REQ_ID:
+        res_id = CMD_GET_STATUS_RES_ID;
+        fill_status_payload(&res_data.status_res.status_data);
+        break;
+
+    case CMD_VERSION_REQ_ID:
+        res_id = CMD_VERSION_RES_ID;
+        res_data.version_res.major = APP_VERSION_MAJOR;
+        res_data.version_res.minor = APP_VERSION_MINOR;
+        res_data.version_res.patch = APP_PATCHLEVEL;
+        break;
+
+    case CMD_SET_CONFIG_REQ_ID:
+        internal_cmd.id = CMD_SET_RATE;
+        internal_cmd.param = (float) req_data.config_req.config.flow_rate;
+        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+        internal_cmd.id = CMD_SET_VOLUME;
+        internal_cmd.param = (float) req_data.config_req.config.volume;
+        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+        internal_cmd.id = CMD_SET_DIAMETER;
+        internal_cmd.param = (float) req_data.config_req.config.diameter;
+        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+        internal_cmd.id = CMD_SET_MODE;
+        internal_cmd.param = (float) req_data.config_req.config.mode;
+        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
+        res_id = CMD_SET_CONFIG_RES_ID;
+        res_data.config_res.status = CMD_OK;
+        break;
+
+    // --- LÓGICA OTA RESTAURADA E CORRIGIDA PARA HEADER V2 ---
+    case CMD_OTA_START_REQ_ID: {
+        // Payload começa no byte 7 (Header Size)
+        // Estrutura: [Size (4 bytes)]
+        uint32_t size = utl_io_get32_fl(&buffer[CMD_HDR_SIZE]);
+
+        LOG_INF("Comando OTA START Recebido. Tamanho: %d", size);
+        ota_start(size);
+
+        res_id = CMD_OTA_RES_ID;
+        res_data.action_res.cmd_req_id = req_id;
+        res_data.action_res.status = CMD_OK;
+        break;
+    }
+
+    case CMD_OTA_CHUNK_REQ_ID: {
+        // Payload começa no byte 7
+        // Estrutura Chunk: [Offset (4)] + [Len (1)] + [Data...]
+        uint8_t* payload_ptr = &buffer[CMD_HDR_SIZE];
+
+        // Offset está nos primeiros 4 bytes (indices 0-3 do payload)
+        // uint32_t offset = utl_io_get32_fl(payload_ptr); // Não usamos aqui, mas existe
+
+        // Len está no byte 4 do payload
+        uint8_t chunk_len = payload_ptr[4];
+
+        // Data começa no byte 5 do payload
+        uint8_t* data_ptr = &payload_ptr[5];
+
+        if(ota_write_chunk(data_ptr, chunk_len) == 0)
+        {
+            res_data.action_res.status = CMD_OK;
+        }
+        else
+        {
+            res_data.action_res.status = CMD_ERR_INVALID_STATE;
+        }
+        res_id = CMD_OTA_RES_ID;
+        res_data.action_res.cmd_req_id = req_id;
+        break;
+    }
+
+    case CMD_OTA_END_REQ_ID: {
+        LOG_INF("Comando OTA END Recebido.");
+        ota_finish();
+        res_id = CMD_OTA_RES_ID;
+        res_data.action_res.cmd_req_id = req_id;
+        res_data.action_res.status = CMD_OK;
+        break;
+    }
+        // ----------------------------------------------------
+
+    default:
+        res_id = CMD_ACTION_RES_ID;
+        res_data.action_res.status = CMD_OK;
+        res_data.action_res.cmd_req_id = req_id;
+
+        if(req_id >= CMD_ACTION_RUN_REQ_ID && req_id <= CMD_ACTION_BOLUS_REQ_ID)
+        {
+            switch(req_id)
+            {
+            case CMD_ACTION_RUN_REQ_ID:
+                internal_cmd.id = CMD_START;
+                break;
+            case CMD_ACTION_PAUSE_REQ_ID:
+                internal_cmd.id = CMD_PAUSE;
+                break;
+            case CMD_ACTION_ABORT_REQ_ID:
+                internal_cmd.id = CMD_STOP;
+                break;
+            case CMD_ACTION_BOLUS_REQ_ID:
+                internal_cmd.id = CMD_SET_BOLUS;
+                break;
+            case CMD_ACTION_PURGE_REQ_ID:
+                internal_cmd.id = CMD_SET_PURGE;
+                break;
+            default:
+                internal_cmd.id = CMD_NONE;
+                break;
+            }
+            if(internal_cmd.id != CMD_NONE)
+            {
+                internal_cmd.param = 0.0f;
+                k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+            }
+        }
+        break;
+    }
+
+    // Prepara a resposta para a PRÓXIMA transação SPI
+    cmd_encode(tx_buffer, &tx_len, &dst, &src, &res_id, &res_data);
+}
+
+// --- MÁQUINA DE ESTADOS (FEEDER) ---
+void protocol_feed_byte(uint8_t byte)
+{
+    switch(p_state)
+    {
+    case STATE_WAIT_SOF1:
+        if(byte == SOF_BYTE_1)
+            p_state = STATE_WAIT_SOF2;
+        break;
+
+    case STATE_WAIT_SOF2:
+        if(byte == SOF_BYTE_2)
+        {
+            p_state = STATE_READ_HEADER;
+            p_index = 0;
+            // Salva o SOF no buffer para validação do CRC depois
+            p_buffer[p_index++] = SOF_BYTE_1;
+            p_buffer[p_index++] = SOF_BYTE_2;
+        }
+        else if(byte == SOF_BYTE_1)
+        {
+            p_state = STATE_WAIT_SOF2; // Sequência AA AA...
+        }
+        else
+        {
+            p_state = STATE_WAIT_SOF1; // Lixo
+        }
+        break;
+
+    case STATE_READ_HEADER:
+        p_buffer[p_index++] = byte;
+        // Header(7 bytes) = SOF1+SOF2 + 5 bytes restantes
+        if(p_index >= CMD_HDR_SIZE)
+        {
+            // Extrai o tamanho esperado do payload
+            // O campo size está nos últimos 2 bytes do header (indices 5 e 6)
+            p_expected_len = utl_io_get16_fl(&p_buffer[5]);
+
+            if(p_expected_len > CMD_MAX_DATA_SIZE)
+            {
+                p_state = STATE_WAIT_SOF1; // Tamanho inválido
+            }
+            else
+            {
+                p_state = STATE_READ_PAYLOAD;
+            }
+        }
+        break;
+
+    case STATE_READ_PAYLOAD:
+        // Lê bytes de Payload + CRC
+        if(p_expected_len > 0 || p_index < (CMD_HDR_SIZE + CMD_TRAILER_SIZE))
+        {
+            p_buffer[p_index++] = byte;
+        }
+
+        // Verifica se completou o frame (Header + Payload + CRC)
+        if(p_index >= (CMD_HDR_SIZE + p_expected_len + CMD_TRAILER_SIZE))
+        {
+            process_valid_packet(p_buffer, p_index);
+            p_state = STATE_WAIT_SOF1; // Volta a caçar
+        }
+        break;
+
+    default:
+        p_state = STATE_WAIT_SOF1;
+        break;
+    }
 }
 
 void hub_thread_entry(void* p1, void* p2, void* p3)
 {
-    LOG_INF("Hub Thread Iniciada - Aguardando SPI...");
+    LOG_INF("Hub Parser (Stream Mode) Iniciado.");
 
     while(1)
     {
-        struct spi_buf rx_buf = {.buf = rx_buffer, .len = SPI_PACKET_SIZE};
+        struct spi_buf rx_buf = {.buf = rx_raw_buffer, .len = SPI_PACKET_SIZE};
         struct spi_buf_set rx_set = {.buffers = &rx_buf, .count = 1};
-
-        gpio_pin_set_dt(&ready_pin, 1);
-        int ret = spi_transceive(spi_dev, &spi_cfg, NULL, &rx_set);
-        gpio_pin_set_dt(&ready_pin, 0);
-
-        if(ret < 0)
-        {
-            LOG_ERR("Erro Fatal SPI Driver: %d", ret);
-            spi_consecutive_errors++;
-            if(spi_consecutive_errors > 5)
-            {
-                reset_spi_peripheral();
-                spi_consecutive_errors = 0;
-            }
-            k_sleep(K_MSEC(100));
-            continue;
-        }
-
-        if(rx_buffer[2] == 0x00)
-        {
-            continue;
-        }
-
-        if(rx_buffer[2] != 0x51 && rx_buffer[2] != 0x00)
-        {
-            uint16_t crc_rx = utl_io_get16_fl(&rx_buffer[5]); // Lê onde estaria o CRC do END
-            // LOG_INF("SPI DEBUG: ID=%02X Len=%02X%02X CRC_LIDO=%04X",
-            //         rx_buffer[2], rx_buffer[4], rx_buffer[3], crc_rx);
-        }
-
-        uint16_t payload_size = utl_io_get16_fl(&rx_buffer[3]);
-        if(payload_size > CMD_MAX_DATA_SIZE)
-            payload_size = CMD_MAX_DATA_SIZE;
-
-        size_t total_valid_len = CMD_HDR_SIZE + payload_size + CMD_TRAILER_SIZE;
-
-        /* LOG DE DIAGNOSTICO DE OTA */
-        // if (rx_buffer[2] >= 0x50) {
-        //      LOG_INF("RX OTA RAW: ID=0x%02X Len=%d CRC_PKT=%02X%02X",
-        //              rx_buffer[2], payload_size,
-        //              rx_buffer[total_valid_len-1], rx_buffer[total_valid_len-2]);
-        // }
-
-        uint8_t src, dst;
-        cmd_ids_t req_id, res_id;
-        cmd_cmds_t req_data, res_data;
-        size_t tx_len = 0;
-
-        memset(&res_data, 0, sizeof(res_data));
-
-        bool decode_success = cmd_decode(rx_buffer, total_valid_len, &src, &dst, &req_id, &req_data);
-
-        if(decode_success)
-        {
-            if(spi_consecutive_errors > 0)
-            {
-                LOG_INF("SPI Recuperado apos %d erros.", spi_consecutive_errors);
-                spi_consecutive_errors = 0;
-            }
-
-            pump_cmd_t internal_cmd = {.id = CMD_NONE, .param = 0.0f};
-
-            switch(req_id)
-            {
-            case CMD_GET_STATUS_REQ_ID:
-                res_id = CMD_GET_STATUS_RES_ID;
-                fill_status_payload(&res_data.status_res.status_data);
-                break;
-
-            case CMD_VERSION_REQ_ID:
-                res_id = CMD_VERSION_RES_ID;
-                res_data.version_res.major = APP_VERSION_MAJOR;
-                res_data.version_res.minor = APP_VERSION_MINOR;
-                res_data.version_res.patch = APP_PATCHLEVEL;
-                break;
-
-            case CMD_SET_CONFIG_REQ_ID:
-                /* 1. Setar Vazão */
-                internal_cmd.id = CMD_SET_RATE;
-                internal_cmd.param = (float) req_data.config_req.config.flow_rate;
-                k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-
-                /* 2. Setar Volume Alvo */
-                internal_cmd.id = CMD_SET_VOLUME;
-                internal_cmd.param = (float) req_data.config_req.config.volume;
-                k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-
-                /* 3. Setar Diâmetro */
-                internal_cmd.id = CMD_SET_DIAMETER;
-                internal_cmd.param = (float) req_data.config_req.config.diameter;
-                k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-
-                /* 4. Setar Modo */
-                internal_cmd.id = CMD_SET_MODE;
-                internal_cmd.param = (float) req_data.config_req.config.mode;
-                k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-
-                res_id = CMD_SET_CONFIG_RES_ID;
-                res_data.config_res.status = CMD_OK;
-                break;
-
-            case CMD_OTA_START_REQ_ID: {
-                uint32_t size = utl_io_get32_fl(&rx_buffer[5]);
-                LOG_INF("Comando OTA START Recebido. Tamanho: %d", size);
-                ota_start(size);
-                res_id = CMD_OTA_RES_ID;
-
-                res_data.action_res.cmd_req_id = req_id;
-
-                res_data.action_res.status = CMD_OK;
-                break;
-            }
-
-            case CMD_OTA_CHUNK_REQ_ID: {
-                uint8_t len = rx_buffer[9];
-                uint8_t* data_ptr = &rx_buffer[10];
-
-                if(ota_write_chunk(data_ptr, len) == 0)
-                {
-                    res_data.action_res.status = CMD_OK;
-                }
-                else
-                {
-                    res_data.action_res.status = CMD_ERR_INVALID_STATE;
-                }
-                res_id = CMD_OTA_RES_ID;
-
-                res_data.action_res.cmd_req_id = req_id;
-                break;
-            }
-
-            case CMD_OTA_END_REQ_ID: {
-                LOG_INF("Comando OTA END Recebido.");
-                ota_finish();
-                res_id = CMD_OTA_RES_ID;
-
-                res_data.action_res.cmd_req_id = req_id;
-
-                res_data.action_res.status = CMD_OK;
-                break;
-            }
-
-            default:
-                res_id = CMD_ACTION_RES_ID;
-                res_data.action_res.status = CMD_OK;
-                res_data.action_res.cmd_req_id = req_id;
-
-                if(req_id >= CMD_ACTION_RUN_REQ_ID && req_id <= CMD_ACTION_BOLUS_REQ_ID)
-                {
-                    switch(req_id)
-                    {
-                    case CMD_ACTION_RUN_REQ_ID:
-                        internal_cmd.id = CMD_START;
-                        break;
-                    case CMD_ACTION_PAUSE_REQ_ID:
-                        internal_cmd.id = CMD_PAUSE;
-                        break;
-                    case CMD_ACTION_ABORT_REQ_ID:
-                        internal_cmd.id = CMD_STOP;
-                        break;
-                    case CMD_ACTION_BOLUS_REQ_ID:
-                        internal_cmd.id = CMD_SET_BOLUS;
-                        break;
-                    case CMD_ACTION_PURGE_REQ_ID:
-                        internal_cmd.id = CMD_SET_PURGE;
-                        break;
-                    default:
-                        internal_cmd.id = CMD_NONE;
-                        break;
-                    }
-                    if(internal_cmd.id != CMD_NONE)
-                    {
-                        internal_cmd.param = 0.0f;
-                        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-                    }
-                }
-                break;
-            }
-            cmd_encode(tx_buffer, &tx_len, &dst, &src, &res_id, &res_data);
-        }
-        else
-        {
-            spi_consecutive_errors++;
-            LOG_ERR("--- SPI DECODE ERROR #%d ---", spi_consecutive_errors);
-            LOG_ERR("ID Recebido: 0x%02X | CRC Calculado Falhou", rx_buffer[2]);
-
-            if(rx_buffer[2] >= 0x50 || spi_consecutive_errors >= 5)
-            {
-                LOG_ERR("ID desconhecido: 0x%02X", rx_buffer[2]);
-                reset_spi_peripheral();
-                spi_consecutive_errors = 0;
-            }
-
-            LOG_HEXDUMP_ERR(rx_buffer, 16, "RX RAW BUFFER");
-
-            res_id = CMD_GET_STATUS_RES_ID;
-            uint8_t err_src = ADDR_SLAVE;
-            uint8_t err_dst = ADDR_MASTER;
-            fill_status_payload(&res_data.status_res.status_data);
-
-            cmd_encode(tx_buffer, &tx_len, &err_dst, &err_src, &res_id, &res_data);
-        }
-
-        if(SPI_PACKET_SIZE > tx_len)
-        {
-            memset(&tx_buffer[tx_len], 0, SPI_PACKET_SIZE - tx_len);
-        }
 
         struct spi_buf tx_buf_s = {.buf = tx_buffer, .len = SPI_PACKET_SIZE};
         struct spi_buf_set tx_set = {.buffers = &tx_buf_s, .count = 1};
 
         gpio_pin_set_dt(&ready_pin, 1);
-        spi_transceive(spi_dev, &spi_cfg, &tx_set, NULL);
+        int ret = spi_transceive(spi_dev, &spi_cfg, &tx_set, &rx_set);
         gpio_pin_set_dt(&ready_pin, 0);
 
+        // --- TRATAMENTO DE ERRO FÍSICO ---
+        if(ret < 0)
+        {
+            LOG_ERR("Erro SPI Driver: %d", ret);
+            spi_consecutive_errors++;
+
+            // Tenta curar
+            reset_spi_peripheral();
+
+            if(spi_consecutive_errors > 10) // 10 erros seguidos = Morte
+            {
+                LOG_ERR("FALHA CRITICA: Reiniciando Sistema...");
+                k_sleep(K_MSEC(200));
+                sys_reboot(SYS_REBOOT_COLD);
+            }
+            k_sleep(K_MSEC(10));
+            continue;
+        }
+
+        // --- ALIMENTA O PARSER ---
+        for(int i = 0; i < SPI_PACKET_SIZE; i++)
+        {
+            protocol_feed_byte(rx_raw_buffer[i]);
+        }
+
+        memset(rx_raw_buffer, 0, SPI_PACKET_SIZE);
         ota_check_and_reboot();
     }
 }

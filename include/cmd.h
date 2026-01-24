@@ -6,13 +6,19 @@
 #include <stdbool.h>
 
 /* Configurações de Tamanho */
-#define CMD_MAX_DATA_SIZE  250
-#define CMD_HDR_SIZE       5
+#define CMD_MAX_DATA_SIZE 250
+
+// [MUDANÇA 1] Tamanho do Header sobe para 7 (AA+55+DST+SRC+ID+SIZE)
+#define CMD_HDR_SIZE       7
 #define CMD_TRAILER_SIZE   2
 #define FRAME_MAX_CMD_SIZE (CMD_HDR_SIZE + CMD_MAX_DATA_SIZE + CMD_TRAILER_SIZE)
 #define CMD_INVALID_ID     255
 #define ADDR_MASTER        0x00
 #define ADDR_SLAVE         0x01
+
+// [MUDANÇA 2] Definição dos Bytes de Start of Frame
+#define CMD_SOF_1_BYTE 0xAA
+#define CMD_SOF_2_BYTE 0x55
 
 typedef enum cmd_ids_e
 {
@@ -44,23 +50,29 @@ typedef enum
 } cmd_status_t;
 
 /* --- ESTRUTURAS DE PACOTE (WIRE FORMAT) --- */
-/* Todos os campos são tipos de tamanho fixo (uint8_t, uint16_t, uint32_t) */
 
 typedef struct __attribute__((packed)) cmd_hdr_s
 {
+    // [MUDANÇA 3] Inserir SOF no início da estrutura
+    uint8_t sof1; // 0xAA
+    uint8_t sof2; // 0x55
     uint8_t dst;
     uint8_t src;
-    uint8_t id;    /* Mapeia para cmd_ids_t */
-    uint16_t size; /* Payload Size */
+    uint8_t id;
+    uint16_t size;
 } cmd_hdr_t;
+
+// ... O resto do arquivo (structs de payload) permanece IDÊNTICO ...
+// ... Copie o restante do seu arquivo original aqui ...
 
 typedef struct __attribute__((packed)) cmd_trl_s
 {
     uint16_t crc;
 } cmd_trl_t;
 
-/* --- PAYLOADS --- */
+// ... (Mantenha todas as outras structs de payload do seu código original) ...
 
+/* --- PAYLOADS (Mantenha igual ao seu) --- */
 typedef struct cmd_version_req_s
 {
 } cmd_version_req_t;
@@ -112,15 +124,19 @@ typedef struct __attribute__((packed)) cmd_get_status_res_s
 typedef struct cmd_action_run_req_s
 {
 } cmd_action_run_req_t;
+
 typedef struct cmd_action_pause_req_s
 {
 } cmd_action_pause_req_t;
+
 typedef struct cmd_action_abort_req_s
 {
 } cmd_action_abort_req_t;
+
 typedef struct cmd_action_purge_req_s
 {
 } cmd_action_purge_req_t;
+
 typedef struct cmd_action_bolus_req_s
 {
 } cmd_action_bolus_req_t;
@@ -131,7 +147,6 @@ typedef struct __attribute__((packed)) cmd_action_res_s
     uint8_t status;
 } cmd_action_res_t;
 
-/* --- TAMANHOS ESPERADOS --- */
 typedef enum cmd_sizes_e
 {
     CMD_VERSION_REQ_SIZE = 0,
@@ -145,7 +160,6 @@ typedef enum cmd_sizes_e
     CMD_OTA_RES_SIZE = sizeof(cmd_action_res_t),
 } cmd_sizes_t;
 
-/* União para facilitar encode/decode genérico */
 typedef union cmd_cmds_u
 {
     cmd_version_req_t version_req;
@@ -165,12 +179,10 @@ typedef union cmd_cmds_u
 
 #define CMD_NUM_CMDS 0x60
 
-/* --- PROTÓTIPOS --- */
-
 bool cmd_decode(uint8_t* buffer, size_t size, uint8_t* src, uint8_t* dst, cmd_ids_t* id, cmd_cmds_t* decoded_cmd);
 bool cmd_encode(uint8_t* buffer, size_t* size, uint8_t* src, uint8_t* dst, cmd_ids_t* id, cmd_cmds_t* encoded_cmd);
 
-/* Encoders Específicos */
+// ... (Mantenha os protótipos de encoders/decoders específicos) ...
 bool cmd_encode_version_req(uint8_t dst, uint8_t src, cmd_version_req_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_version_res(uint8_t dst, uint8_t src, cmd_version_res_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_status_req(uint8_t dst, uint8_t src, cmd_get_status_req_t* cmd, uint8_t* buffer, size_t* size);
@@ -183,7 +195,6 @@ bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_
 bool cmd_encode_action_res(uint8_t dst, uint8_t src, cmd_action_res_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_ota_res(uint8_t dst, uint8_t src, cmd_action_res_t* cmd, uint8_t* buffer, size_t* size);
 
-/* Decoders Específicos */
 bool cmd_decode_version_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
 bool cmd_decode_version_res(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
 bool cmd_decode_status_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
@@ -198,9 +209,9 @@ bool cmd_decode_action_bolus_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
 bool cmd_decode_action_res(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
 
 uint16_t crc16_ccitt(const uint8_t* data, size_t length);
-
 bool cmd_decode_ota_generic(cmd_cmds_t* cmd, uint8_t* buffer, size_t size);
 
+// ... (Structs OTA) ...
 typedef struct __attribute__((packed))
 {
     uint32_t total_size;
@@ -208,9 +219,9 @@ typedef struct __attribute__((packed))
 
 typedef struct __attribute__((packed))
 {
-    uint32_t offset;  // Onde gravar na flash
-    uint8_t len;      // Quantos bytes úteis tem no array
-    uint8_t data[48]; // Dados binários
+    uint32_t offset;
+    uint8_t len;
+    uint8_t data[48];
 } cmd_ota_chunk_t;
 
 typedef struct
