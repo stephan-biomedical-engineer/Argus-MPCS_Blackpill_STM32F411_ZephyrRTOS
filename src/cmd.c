@@ -62,6 +62,7 @@ bool cmd_decode(uint8_t* buffer, size_t size, uint8_t* src, uint8_t* dst, cmd_id
     case CMD_OTA_START_REQ_ID:
     case CMD_OTA_CHUNK_REQ_ID:
     case CMD_OTA_END_REQ_ID:
+    case CMD_OTA_RES_ID:
         break;
     default:
         return false;
@@ -83,6 +84,7 @@ bool cmd_decode(uint8_t* buffer, size_t size, uint8_t* src, uint8_t* dst, cmd_id
         [CMD_OTA_START_REQ_ID] = cmd_decode_ota_generic,
         [CMD_OTA_CHUNK_REQ_ID] = cmd_decode_ota_generic,
         [CMD_OTA_END_REQ_ID] = cmd_decode_ota_generic,
+        [CMD_OTA_RES_ID] = cmd_decode_ota_generic,
     };
 
     if(decoders[(uint8_t) *id] == NULL)
@@ -103,8 +105,6 @@ bool cmd_encode(uint8_t* buffer, size_t* size, uint8_t* src, uint8_t* dst, cmd_i
     case CMD_VERSION_REQ_ID:
         status = cmd_encode_version_req(*dst, *src, &encoded_cmd->version_req, buffer, size);
         break;
-    // ... repita para todos os casos ...
-    // CERTIFIQUE-SE DE COPIAR TODOS OS CASES DO SEU ARQUIVO ORIGINAL
     case CMD_GET_STATUS_REQ_ID:
         status = cmd_encode_status_req(*dst, *src, &encoded_cmd->status_req, buffer, size);
         break;
@@ -120,6 +120,12 @@ bool cmd_encode(uint8_t* buffer, size_t* size, uint8_t* src, uint8_t* dst, cmd_i
     case CMD_ACTION_ABORT_REQ_ID:
         status = cmd_encode_action_abort_req(*dst, *src, &encoded_cmd->abort_req, buffer, size);
         break;
+    case CMD_ACTION_PURGE_REQ_ID:
+        status = cmd_encode_action_purge_req(*dst, *src, &encoded_cmd->purge_req, buffer, size);
+        break;
+    case CMD_ACTION_BOLUS_REQ_ID:
+        status = cmd_encode_action_bolus_req(*dst, *src, &encoded_cmd->bolus_req, buffer, size);
+        break;
     case CMD_VERSION_RES_ID:
         status = cmd_encode_version_res(*dst, *src, &encoded_cmd->version_res, buffer, size);
         break;
@@ -133,7 +139,7 @@ bool cmd_encode(uint8_t* buffer, size_t* size, uint8_t* src, uint8_t* dst, cmd_i
         status = cmd_encode_action_res(*dst, *src, &encoded_cmd->action_res, buffer, size);
         break;
     case CMD_OTA_RES_ID:
-        status = cmd_encode_ota_res(*dst, *src, &encoded_cmd->action_res, buffer, size);
+        status = cmd_encode_ota_res(*dst, *src, &encoded_cmd->ota_res, buffer, size);
         break;
     default:
         status = false;
@@ -186,6 +192,28 @@ bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_
 {
     return cmd_encode_header_only(dst, src, CMD_ACTION_ABORT_REQ_ID, buffer, size);
 }
+bool cmd_encode_action_purge_req(uint8_t dst, uint8_t src, cmd_action_purge_req_t* cmd, uint8_t* buffer, size_t* size)
+{
+    return cmd_encode_header_only(dst, src, CMD_ACTION_PURGE_REQ_ID, buffer, size);
+}
+bool cmd_encode_action_bolus_req(uint8_t dst, uint8_t src, cmd_action_bolus_req_t* cmd, uint8_t* buffer, size_t* size)
+{
+    uint8_t* pbuf = buffer;
+    write_sof(&pbuf);
+    utl_io_put8_tl_ap(dst, pbuf);
+    utl_io_put8_tl_ap(src, pbuf);
+    utl_io_put8_tl_ap(CMD_ACTION_BOLUS_REQ_ID, pbuf);
+    utl_io_put16_tl_ap(CMD_ACTION_BOLUS_REQ_SIZE, pbuf);
+
+    utl_io_put32_tl_ap(cmd->payload.bolus_volume, pbuf);
+    utl_io_put32_tl_ap(cmd->payload.bolus_rate, pbuf);
+
+    utl_io_put16_tl_ap(utl_crc16_data(buffer, (pbuf - buffer), 0xFFFF), pbuf);
+    *size = (pbuf - buffer);
+
+    return true;
+
+}
 
 // [MUDANÇA CRÍTICA ENCODE] Payloads Complexos precisam de write_sof() manual
 bool cmd_encode_config_req(uint8_t dst, uint8_t src, cmd_set_config_req_t* cmd, uint8_t* buffer, size_t* size)
@@ -202,7 +230,7 @@ bool cmd_encode_config_req(uint8_t dst, uint8_t src, cmd_set_config_req_t* cmd, 
     utl_io_put32_tl_ap(cmd->config.volume, pbuf);
     utl_io_put32_tl_ap(cmd->config.flow_rate, pbuf);
     utl_io_put8_tl_ap(cmd->config.diameter, pbuf);
-    utl_io_put8_tl_ap(cmd->config.mode, pbuf);
+    // utl_io_put8_tl_ap(cmd->config.mode, pbuf);
 
     utl_io_put16_tl_ap(utl_crc16_data(buffer, (pbuf - buffer), 0xFFFF), pbuf);
     *size = (pbuf - buffer);
@@ -317,7 +345,12 @@ bool cmd_decode_action_purge_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size)
 }
 bool cmd_decode_action_bolus_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size)
 {
-    return size == 0;
+    uint8_t* pbuf = buffer;
+    if(size != CMD_ACTION_BOLUS_REQ_SIZE)
+        return false;
+    cmd->bolus_req.payload.bolus_volume = utl_io_get32_fl_ap(pbuf);
+    cmd->bolus_req.payload.bolus_rate = utl_io_get32_fl_ap(pbuf);
+    return true;
 }
 
 bool cmd_decode_config_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size)
@@ -328,7 +361,7 @@ bool cmd_decode_config_req(cmd_cmds_t* cmd, uint8_t* buffer, size_t size)
     cmd->config_req.config.volume = utl_io_get32_fl_ap(pbuf);
     cmd->config_req.config.flow_rate = utl_io_get32_fl_ap(pbuf);
     cmd->config_req.config.diameter = utl_io_get8_fl_ap(pbuf);
-    cmd->config_req.config.mode = utl_io_get8_fl_ap(pbuf);
+    // cmd->config_req.config.mode = utl_io_get8_fl_ap(pbuf);
     return true;
 }
 

@@ -47,6 +47,8 @@ typedef enum
     CMD_ERR_PARAM_RANGE,
     CMD_ERR_UNKNOWN_CMD,
     CMD_ERR_CHECKSUM,
+    CMD_ERR_TIMEOUT,
+    CMD_ERR_SYNC,
 } cmd_status_t;
 
 /* --- ESTRUTURAS DE PACOTE (WIRE FORMAT) --- */
@@ -89,7 +91,7 @@ typedef struct __attribute__((packed)) cmd_config_payload_s
     uint32_t volume;
     uint32_t flow_rate;
     uint8_t diameter;
-    uint8_t mode;
+    // uint8_t mode;
 } cmd_config_payload_t;
 
 typedef struct __attribute__((packed)) cmd_set_config_req_s
@@ -99,7 +101,7 @@ typedef struct __attribute__((packed)) cmd_set_config_req_s
 
 typedef struct __attribute__((packed)) cmd_set_config_res_s
 {
-    uint8_t status; /* [CORRIGIDO] Era cmd_status_t. Agora é uint8_t (1 byte fixo) */
+    uint8_t status; 
 } cmd_set_config_res_t;
 
 typedef struct __attribute__((packed)) cmd_status_payload_s
@@ -137,8 +139,15 @@ typedef struct cmd_action_purge_req_s
 {
 } cmd_action_purge_req_t;
 
-typedef struct cmd_action_bolus_req_s
+typedef struct __attribute__((packed)) cmd_action_bolus_payload_s
 {
+    uint32_t bolus_volume;
+    uint32_t bolus_rate;
+} cmd_action_bolus_payload_t;
+
+typedef struct __attribute__((packed)) cmd_action_bolus_req_s
+{
+    cmd_action_bolus_payload_t payload;
 } cmd_action_bolus_req_t;
 
 typedef struct __attribute__((packed)) cmd_action_res_s
@@ -157,6 +166,7 @@ typedef enum cmd_sizes_e
     CMD_SET_CONFIG_RES_SIZE = sizeof(cmd_set_config_res_t),
     CMD_ACTION_REQ_SIZE = 0,
     CMD_ACTION_RES_SIZE = sizeof(cmd_action_res_t),
+    CMD_ACTION_BOLUS_REQ_SIZE = sizeof(cmd_action_bolus_req_t),
     CMD_OTA_RES_SIZE = sizeof(cmd_action_res_t),
 } cmd_sizes_t;
 
@@ -192,6 +202,8 @@ bool cmd_encode_config_res(uint8_t dst, uint8_t src, cmd_set_config_res_t* cmd, 
 bool cmd_encode_action_run_req(uint8_t dst, uint8_t src, cmd_action_run_req_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_action_pause_req(uint8_t dst, uint8_t src, cmd_action_pause_req_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_action_abort_req(uint8_t dst, uint8_t src, cmd_action_abort_req_t* cmd, uint8_t* buffer, size_t* size);
+bool cmd_encode_action_purge_req(uint8_t dst, uint8_t src, cmd_action_purge_req_t* cmd, uint8_t* buffer, size_t* size);
+bool cmd_encode_action_bolus_req(uint8_t dst, uint8_t src, cmd_action_bolus_req_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_action_res(uint8_t dst, uint8_t src, cmd_action_res_t* cmd, uint8_t* buffer, size_t* size);
 bool cmd_encode_ota_res(uint8_t dst, uint8_t src, cmd_action_res_t* cmd, uint8_t* buffer, size_t* size);
 

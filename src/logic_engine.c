@@ -3,22 +3,28 @@
 #include "sensor_data.h"
 #include "encoder.h"
 #include "motor_driver.h"
+#include "cmd.h"
 #include "hub.h"
 
 LOG_MODULE_REGISTER(logic_engine, LOG_LEVEL_INF);
 
 /* Definição das Filas */
-K_MSGQ_DEFINE(cmd_queue, sizeof(pump_cmd_t), 10, 4);
-/* A sensor_data_q já foi definida no adc_driver.c ou aqui.
-   Se estiver no adc_driver, use 'extern'. Vamos assumir extern aqui */
+// K_MSGQ_DEFINE(cmd_queue, sizeof(pump_cmd_t), 10, 4);
+extern struct k_msgq hub_cmd_q;
 extern struct k_msgq sensor_data_q;
+volatile command_id_t logic_last_cmd;
+volatile logic_result_t logic_last_result;
+struct k_sem logic_cmd_sem;
 
 /* Estado Global da Aplicação (ÚNICA FONTE DE VERDADE) */
-static pump_status_t global_status = {.current_state = STATE_IDLE,
-                                      .infused_volume = 0.0f,
-                                      .target_volume = 100.0f,
-                                      .configured_flow_rate = 0,
-                                      .pressure_mmhg = 0};
+static pump_status_t global_status = 
+{
+    .current_state = STATE_IDLE,
+    .infused_volume = 0.0f,
+    .target_volume = 100.0f,
+    .configured_flow_rate = 0,
+    .pressure_mmhg = 0
+};
 
 /* Calibração: ml por grau do encoder (Exemplo) */
 #define ML_PER_DEGREE 0.005f
@@ -81,9 +87,11 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
     LOG_INF("Logic Engine Iniciada. Aguardando comandos...");
 
     /* Configura eventos de poll */
-    k_poll_event_init(&events[0], K_POLL_TYPE_MSGQ_DATA_AVAILABLE, K_POLL_MODE_NOTIFY_ONLY, &cmd_queue);
+    k_poll_event_init(&events[0], K_POLL_TYPE_MSGQ_DATA_AVAILABLE, K_POLL_MODE_NOTIFY_ONLY, &hub_cmd_q);
 
     k_poll_event_init(&events[1], K_POLL_TYPE_MSGQ_DATA_AVAILABLE, K_POLL_MODE_NOTIFY_ONLY, &sensor_data_q);
+
+    k_sem_init(&logic_cmd_sem, 0, 1);
 
     while(1)
     {
@@ -93,20 +101,44 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
         /* --- 1. Processamento de Comandos (Vindo do SPI/Hub) --- */
         if(events[0].state == K_POLL_STATE_MSGQ_DATA_AVAILABLE)
         {
-            k_msgq_get(&cmd_queue, &cmd, K_NO_WAIT);
+            k_msgq_get(&hub_cmd_q, &cmd, K_NO_WAIT);
 
-            LOG_INF("CMD Proc: ID=%d Param=%d", cmd.id, (int) cmd.param);
+            logic_ack_t ack = 
+            {
+                .cmd_id = cmd.id,
+                .result = LOGIC_OK
+            };
+
+            LOG_INF("CMD Proc: ID=%d Param=%d Param2=%d", cmd.id, (int) cmd.param, (int) cmd.param2);
 
             bool state_changed = false;
 
             switch(cmd.id)
             {
             case CMD_START:
-                // Aceita Start se estiver parado ou pausado
                 if(global_status.current_state == STATE_IDLE || global_status.current_state == STATE_PAUSED)
                 {
                     global_status.current_state = STATE_RUNNING;
                     state_changed = true;
+                }
+                // CASO 2: Redundância (Já está em BOLUS ou PURGE)
+                // Explicação: O comando anterior (CMD_SET_BOLUS) já ligou o motor.
+                // O "Start" que chegou agora é apenas uma confirmação do MQTT. 
+                // A gente responde OK, mas NÃO muda o estado para RUNNING (senão cancelaria o Bolus).
+                else if(global_status.current_state == STATE_BOLUS || global_status.current_state == STATE_PURGE)
+                {
+                    ack.result = LOGIC_OK; // Responde ACK (Sucesso)
+                    global_status.current_state = STATE_RUNNING;
+                    state_changed = false; // Não mexe no motor, deixa o Bolus continuar
+                }
+                // CASO 3: Erro (Ex: Já está em RUNNING ou em ALARME)
+                else if (global_status.current_state == STATE_RUNNING)
+                {
+                     ack.result = LOGIC_OK; // Se já está em RUNNING, start é inócuo (Idempotência)
+                }
+                else
+                {
+                    ack.result = LOGIC_ERR_INVALID_STATE;
                 }
                 break;
 
@@ -118,11 +150,17 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
                     global_status.current_state = STATE_PAUSED;
                     state_changed = true;
                 }
+                else
+                {
+                    ack.result = LOGIC_ERR_INVALID_STATE;
+                }
                 break;
 
             case CMD_STOP:
                 global_status.current_state = STATE_IDLE;
                 global_status.infused_volume = 0.0f; // Reseta volume
+                global_status.configured_flow_rate = 0; // Reseta vazão
+                global_status.target_volume = 0.0f; // Reseta alvo
                 state_changed = true;
                 break;
 
@@ -131,7 +169,14 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
                 if(global_status.current_state == STATE_IDLE || global_status.current_state == STATE_PAUSED)
                 {
                     global_status.current_state = STATE_BOLUS;
+                    global_status.configured_flow_rate = (cmd.param > 0.0f) ? (uint32_t) cmd.param : (uint32_t) RATE_BOLUS_DEFAULT;
+                    global_status.target_volume = cmd.param2; 
+                    LOG_INF("Iniciando BOLUS de %d ml/h", global_status.configured_flow_rate);
                     state_changed = true;
+                }
+                else
+                {
+                    ack.result = LOGIC_ERR_INVALID_STATE;
                 }
                 break;
 
@@ -139,7 +184,13 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
                 if(global_status.current_state == STATE_IDLE || global_status.current_state == STATE_PAUSED)
                 {
                     global_status.current_state = STATE_PURGE;
+                    global_status.configured_flow_rate = (uint32_t) RATE_PURGE_DEFAULT;
+                    LOG_INF("Iniciando PURGE de %d ml/h", RATE_PURGE_DEFAULT);
                     state_changed = true;
+                }
+                else
+                {
+                    ack.result = LOGIC_ERR_INVALID_STATE;
                 }
                 break;
                 // -----------------------------------
@@ -159,9 +210,9 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
             case CMD_SET_DIAMETER:
                 global_status.syringe_diameter = (uint8_t) cmd.param;
                 break;
-            case CMD_SET_MODE:
-                global_status.infusion_mode = (uint8_t) cmd.param;
-                break;
+            // case CMD_SET_MODE:
+            //     global_status.infusion_mode = (uint8_t) cmd.param;
+            //     break;
             default:
                 LOG_WRN("Comando desconhecido ou não tratado: %d", cmd.id);
                 break;
@@ -169,9 +220,16 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
 
             events[0].state = K_POLL_STATE_NOT_READY;
 
+            // k_msgq_put(&logic_ack_q, &ack, K_NO_WAIT);
+
+            logic_last_cmd = cmd.id;
+            logic_last_result = ack.result;
+            k_sem_give(&logic_cmd_sem);
+
             // Só chama o driver se houve mudança relevante
             if(state_changed)
             {
+                LOG_INF("Status changed from id: %d", logic_last_cmd);
                 update_motor_hardware(&global_status);
             }
         }

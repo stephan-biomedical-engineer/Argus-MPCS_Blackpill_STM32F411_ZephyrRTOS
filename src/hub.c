@@ -29,16 +29,6 @@ K_MSGQ_DEFINE(hub_cmd_q, sizeof(pump_cmd_t), 10, 4);
 static uint8_t rx_raw_buffer[SPI_PACKET_SIZE]; // Buffer DMA
 static uint8_t tx_buffer[SPI_PACKET_SIZE];     // Buffer de resposta
 
-// --- VARIÁVEIS DO PARSER (MÁQUINA DE ESTADOS) ---
-typedef enum
-{
-    STATE_WAIT_SOF1,
-    STATE_WAIT_SOF2,
-    STATE_READ_HEADER,
-    STATE_READ_PAYLOAD,
-    STATE_READ_CRC
-} parser_state_t;
-
 static parser_state_t p_state = STATE_WAIT_SOF1;
 static uint8_t p_buffer[CMD_MAX_DATA_SIZE + 16]; // Buffer de montagem
 static uint16_t p_index = 0;
@@ -135,7 +125,12 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
         return;
     }
 
-    pump_cmd_t internal_cmd = {.id = CMD_NONE, .param = 0.0f};
+    pump_cmd_t internal_cmd = 
+    {
+        .id = CMD_NONE, 
+        .param = 0.0f,
+        .param2 = 0.0f,
+    };
 
     switch(req_id)
     {
@@ -161,16 +156,50 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
         internal_cmd.id = CMD_SET_DIAMETER;
         internal_cmd.param = (float) req_data.config_req.config.diameter;
         k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
-        internal_cmd.id = CMD_SET_MODE;
-        internal_cmd.param = (float) req_data.config_req.config.mode;
-        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+        // internal_cmd.id = CMD_SET_MODE;
+        // internal_cmd.param = (float) req_data.config_req.config.mode;
+        // k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
 
         res_id = CMD_SET_CONFIG_RES_ID;
         res_data.config_res.status = CMD_OK;
         break;
 
+    case CMD_ACTION_BOLUS_REQ_ID:
+    {
+        internal_cmd.id = CMD_SET_BOLUS;
+        
+        // [CORREÇÃO 1] Acesso correto via .payload
+        internal_cmd.param  = (float)req_data.bolus_req.payload.bolus_rate;   
+        internal_cmd.param2 = (float)req_data.bolus_req.payload.bolus_volume; 
+
+        // [CORREÇÃO 2] Lógica de Sincronia Obrigatória
+        k_sem_reset(&logic_cmd_sem); // Limpa sinal antigo
+
+        k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT); // Envia
+
+        // Espera o logic_engine processar e responder
+        if (k_sem_take(&logic_cmd_sem, K_MSEC(50)) == 0)
+        {
+            if (logic_last_cmd != internal_cmd.id)
+                res_data.action_res.status = CMD_ERR_SYNC;
+            else if (logic_last_result == LOGIC_OK)
+                res_data.action_res.status = CMD_OK;
+            else
+                res_data.action_res.status = CMD_ERR_INVALID_STATE; 
+        }
+        else
+        {
+            res_data.action_res.status = CMD_ERR_TIMEOUT;
+        }
+
+        res_id = CMD_ACTION_RES_ID;
+        res_data.action_res.cmd_req_id = req_id;
+        break;
+    }
+
     // --- LÓGICA OTA RESTAURADA E CORRIGIDA PARA HEADER V2 ---
-    case CMD_OTA_START_REQ_ID: {
+    case CMD_OTA_START_REQ_ID: 
+    {
         // Payload começa no byte 7 (Header Size)
         // Estrutura: [Size (4 bytes)]
         uint32_t size = utl_io_get32_fl(&buffer[CMD_HDR_SIZE]);
@@ -184,7 +213,8 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
         break;
     }
 
-    case CMD_OTA_CHUNK_REQ_ID: {
+    case CMD_OTA_CHUNK_REQ_ID: 
+    {
         // Payload começa no byte 7
         // Estrutura Chunk: [Offset (4)] + [Len (1)] + [Data...]
         uint8_t* payload_ptr = &buffer[CMD_HDR_SIZE];
@@ -211,12 +241,13 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
         break;
     }
 
-    case CMD_OTA_END_REQ_ID: {
+    case CMD_OTA_END_REQ_ID: 
+    {
         LOG_INF("Comando OTA END Recebido.");
-        ota_finish();
         res_id = CMD_OTA_RES_ID;
         res_data.action_res.cmd_req_id = req_id;
         res_data.action_res.status = CMD_OK;
+        ota_finish();
         break;
     }
         // ----------------------------------------------------
@@ -239,9 +270,9 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
             case CMD_ACTION_ABORT_REQ_ID:
                 internal_cmd.id = CMD_STOP;
                 break;
-            case CMD_ACTION_BOLUS_REQ_ID:
-                internal_cmd.id = CMD_SET_BOLUS;
-                break;
+            // case CMD_ACTION_BOLUS_REQ_ID:
+            //     internal_cmd.id = CMD_SET_BOLUS;
+            //     break;
             case CMD_ACTION_PURGE_REQ_ID:
                 internal_cmd.id = CMD_SET_PURGE;
                 break;
@@ -249,11 +280,38 @@ static void process_valid_packet(uint8_t* buffer, size_t len)
                 internal_cmd.id = CMD_NONE;
                 break;
             }
-            if(internal_cmd.id != CMD_NONE)
+            if (internal_cmd.id != CMD_NONE)
             {
                 internal_cmd.param = 0.0f;
+
+                k_sem_reset(&logic_cmd_sem); 
+
                 k_msgq_put(&hub_cmd_q, &internal_cmd, K_NO_WAIT);
+
+                // Agora o take vai bloquear de verdade até o logic_engine processar
+                if (k_sem_take(&logic_cmd_sem, K_MSEC(50)) == 0)
+                {
+                    // Verifica se o comando processado foi o que pedimos
+                    if (logic_last_cmd != internal_cmd.id)
+                    {
+                        res_data.action_res.status = CMD_ERR_SYNC;
+                    }
+                    else if (logic_last_result == LOGIC_OK)
+                    {
+                        res_data.action_res.status = CMD_OK;
+                    }
+                    else
+                    {
+                        // Aqui ele vai pegar corretamente o LOGIC_ERR_INVALID_STATE
+                        res_data.action_res.status = CMD_ERR_INVALID_STATE;
+                    }
+                }
+                else
+                {
+                    res_data.action_res.status = CMD_ERR_TIMEOUT;
+                }
             }
+
         }
         break;
     }

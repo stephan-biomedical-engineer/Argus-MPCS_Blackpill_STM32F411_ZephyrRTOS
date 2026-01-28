@@ -30,7 +30,7 @@ typedef enum
     CMD_SET_RATE,
     CMD_SET_VOLUME,
     CMD_SET_DIAMETER,
-    CMD_SET_MODE,
+    // CMD_SET_MODE,
     CMD_CLEAR_ALARM
 } command_id_t;
 
@@ -38,6 +38,7 @@ typedef struct
 {
     command_id_t id;
     float param;
+    float param2;
 } pump_cmd_t;
 
 typedef struct
@@ -47,7 +48,7 @@ typedef struct
     float target_volume;
     uint32_t configured_flow_rate;
     uint8_t syringe_diameter;
-    uint8_t infusion_mode;
+    // uint8_t infusion_mode;
     uint32_t pressure_mmhg;
     uint8_t alarm_code;
 } pump_status_t;
