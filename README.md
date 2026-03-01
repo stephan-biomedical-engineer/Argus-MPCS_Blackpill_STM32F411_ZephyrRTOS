@@ -1,4 +1,3 @@
---- 
 # Argus Infusion Pump - Hardware Control (Zephyr RTOS) ⚙️💉
 
 This repository contains the low-level firmware for the Argus Infusion Pump, designed to run on STM32 family microcontrollers (Blackpill). Developed on top of the **Zephyr RTOS**, this module is responsible for all Hard Real-Time critical operations, including motor control, sensor acquisition, and safety management (hardware-level alarms).
