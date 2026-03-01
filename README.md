@@ -1,4 +1,4 @@
----
+--- |
 
 # Argus Infusion Pump - Hardware Control (Zephyr RTOS) ⚙️💉
 
