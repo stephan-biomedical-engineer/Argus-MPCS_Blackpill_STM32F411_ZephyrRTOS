@@ -90,8 +90,8 @@
         };
 
         motor_pwm: motor_pulse {
-            pwms = <&pwm11 1 PWM_USEC(1000) PWM_POLARITY_NORMAL>;
-            label = "Stepper Pulse";
+            pwms = <&pwm4 4 PWM_USEC(1000) PWM_POLARITY_NORMAL>;
+            label = "Stepper Pulse PB9 (TIM4)";
         };
     };
 };
@@ -122,11 +122,13 @@
     };
 };
 
-&timers11 {
+&timers4 {
     status = "okay";
-    pwm11: pwm {
+    st,prescaler = <95>; /* Clock máximo para precisão */
+
+    pwm4: pwm {
         status = "okay";
-        pinctrl-0 = <&tim11_ch1_pwm_pb9>;
+        pinctrl-0 = <&tim4_ch4_pwm_pb9>; /* Aponta para a nova config AF2 */
         pinctrl-names = "default";
     };
 };
@@ -194,8 +196,11 @@
     tim2_ch1_pwm_pa0: tim2_ch1_pwm_pa0 {
         pinmux = <STM32_PINMUX('A', 0, AF1)>;
     };
-    tim11_ch1_pwm_pb9: tim11_ch1_pwm_pb9 {
-        pinmux = <STM32_PINMUX('B', 9, AF3)>;
+    tim4_ch4_pwm_pb9: tim4_ch4_pwm_pb9 {
+        pinmux = <STM32_PINMUX('B', 9, AF2)>; /* AF2 = TIM4_CH4 */
+        bias-pull-down; /* Garante 0V quando desligado */
+        drive-push-pull;
+        slew-rate = "very-high-speed"; /* Bom para PWM rápido */
     };
     
     /* Hardware Encoder Timer 1 (PA8 e PA9) */
@@ -273,3 +278,4 @@
 &i2c3 { status = "disabled"; };
 &usart2 { status = "disabled"; };
 &usart6 { status = "disabled"; };
+&timers11 { status = "disabled"; };

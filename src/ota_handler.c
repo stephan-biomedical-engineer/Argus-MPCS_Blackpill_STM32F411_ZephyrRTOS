@@ -4,25 +4,41 @@
 #include <zephyr/dfu/flash_img.h>
 #include <zephyr/dfu/mcuboot.h>
 #include <zephyr/sys/reboot.h>
-#include <zephyr/drivers/watchdog.h>
 #include <zephyr/storage/flash_map.h>
 #include "ota_handler.h"
 
 LOG_MODULE_REGISTER(ota_handler, LOG_LEVEL_INF);
 
-#define REBOOT_DELAY_MS 1000
+/* * Tempo suficiente para o Linux receber o ACK (500ms é seguro).
+ * Se for muito curto, o STM32 reseta antes do bit sair pelo SPI.
+ */
+#define REBOOT_DELAY_MS 2000 
 
 static struct flash_img_context ctx;
-static bool reboot_pending = false;
-static int64_t reboot_timestamp = 0;
+
+/* Item de trabalho do Kernel */
+static struct k_work_delayable reboot_work;
+
+/* Esta função roda no contexto do Sistema, fora da thread do SPI */
+static void ota_reboot_worker(struct k_work *item)
+{
+    LOG_WRN(">>> OTA: Aplicando Update e Reiniciando (MCUboot Swap) <<<");
+    
+    // Pequeno delay para garantir que o log saia pela UART
+    k_busy_wait(1000); 
+    
+    sys_reboot(SYS_REBOOT_COLD);
+}
 
 void ota_start(uint32_t total_size)
 {
     LOG_INF("Iniciando OTA. Tamanho: %d bytes", total_size);
     flash_img_init(&ctx);
-    reboot_pending = false;
-    reboot_timestamp = 0;
+    
+    // Inicializa a workqueue (seguro chamar várias vezes)
+    k_work_init_delayable(&reboot_work, ota_reboot_worker);
 }
+
 int ota_write_chunk(uint8_t* data, size_t len)
 {
     int ret = flash_img_buffered_write(&ctx, data, len, false);
@@ -33,29 +49,24 @@ int ota_write_chunk(uint8_t* data, size_t len)
 
 void ota_finish(void)
 {
+    // 1. Descarrega buffer restante na flash
     flash_img_buffered_write(&ctx, NULL, 0, true);
 
     LOG_INF("Download completo. Verificando e Agendando Swap...");
 
+    // 2. Marca a imagem para teste
     if(boot_request_upgrade(BOOT_UPGRADE_TEST) == 0)
     {
-        LOG_INF("Update agendado! Reboot em %d ms...", REBOOT_DELAY_MS);
-        reboot_pending = true;
-
-        reboot_timestamp = k_uptime_get() + REBOOT_DELAY_MS;
+        LOG_INF("Update valido! Agendando reboot para daqui a %d ms...", REBOOT_DELAY_MS);
+        
+        // 3. Agenda o reboot para o futuro.
+        // O código continua rodando aqui, retorna para o hub.c, 
+        // o hub.c envia o ACK pelo SPI, e SÓ DEPOIS o reboot acontece.
+        k_work_schedule(&reboot_work, K_MSEC(REBOOT_DELAY_MS));
     }
     else
     {
-        LOG_ERR("Falha ao agendar update!");
+        LOG_ERR("Falha ao agendar update no MCUboot!");
     }
 }
 
-void ota_check_and_reboot(void)
-{
-    if(reboot_pending && (k_uptime_get() >= reboot_timestamp))
-    {
-        LOG_WRN("Reiniciando sistema para aplicar update...");
-        k_busy_wait(1000);
-        sys_reboot(SYS_REBOOT_COLD);
-    }
-}

@@ -23,7 +23,8 @@ static pump_status_t global_status =
     .infused_volume = 0.0f,
     .target_volume = 100.0f,
     .configured_flow_rate = 0,
-    .pressure_mmhg = 0
+    .pressure_mmhg = 0,
+    .syringe_diameter = 20
 };
 
 /* Calibração: ml por grau do encoder (Exemplo) */
@@ -272,9 +273,12 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
         }
 
         int32_t delta = encoder_get_delta();
+        // LOG_INF("Delta Encoder: %d", delta);
 
         if(delta != 0)
         {
+            LOG_INF("ENCODER DETECTADO: Delta=%d, RateAtual=%d", delta, global_status.configured_flow_rate);
+            
             /* CENÁRIO A: O Encoder é um botão de ajuste (Knob) no painel */
             if(global_status.current_state == STATE_IDLE || global_status.current_state == STATE_PAUSED)
             {
@@ -284,7 +288,9 @@ void logic_thread_entry(void* p1, void* p2, void* p3)
 
             /* CENÁRIO B: O Encoder está no motor (Feedback de movimento) */
             /* Se o motor girou, calculamos o volume infundido real */
-            if(global_status.current_state == STATE_RUNNING)
+            if(global_status.current_state == STATE_RUNNING ||
+               global_status.current_state == STATE_BOLUS ||
+               global_status.current_state == STATE_PURGE)
             {
                 float vol_increment = (float) delta * ML_PER_DEGREE;
                 // Só soma se for positivo (sentido da infusão)

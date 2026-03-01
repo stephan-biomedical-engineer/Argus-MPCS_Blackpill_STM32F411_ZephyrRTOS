@@ -9,7 +9,7 @@ LOG_MODULE_REGISTER(motor_driver, LOG_LEVEL_INF);
 
 static const struct pwm_dt_spec pwm_dev = PWM_DT_SPEC_GET(DT_ALIAS(motor_pwm)); // Era motor_pulse
 static const struct gpio_dt_spec dir_pin =
-    GPIO_DT_SPEC_GET(DT_ALIAS(motor_dir), gpios); // Este estava certo (motor-dir -> motor_dir)
+GPIO_DT_SPEC_GET(DT_ALIAS(motor_dir), gpios); 
 static const struct gpio_dt_spec en_pin = GPIO_DT_SPEC_GET(DT_ALIAS(motor_en), gpios); // Era motor_ena
 
 /* CONFIGURAÇÃO MECÂNICA - CALIBRE ISTO! */
